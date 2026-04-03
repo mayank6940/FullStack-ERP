@@ -1,0 +1,56 @@
+import express from 'express';
+import { PrismaClient } from '@prisma/client';
+import { authMiddleware, roleGuard } from '../middleware/auth.js';
+import AssignmentService from '../services/AssignmentService.js';
+
+const router = express.Router();
+const prisma = new PrismaClient();
+const assignmentService = new AssignmentService(prisma);
+
+router.get('/workload', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) => {
+  try {
+    const employees = await prisma.employee.findMany({
+      where: {
+        isActive: true,
+        role: { in: ['FABRIC_MAN', 'CUTTER', 'TAILOR'] }
+      },
+      select: {
+        id: true,
+        empId: true,
+        name: true,
+        role: true
+      }
+    });
+
+    const workloads = await Promise.all(
+      employees.map(async (employee) => ({
+        ...employee,
+        ...(await assignmentService.getWorkload(employee.id))
+      }))
+    );
+
+    res.json({ success: true, data: { workloads }, message: 'Workload fetched' });
+  } catch (error) {
+    console.error('assignment/workload error:', error);
+    res.status(500).json({ success: false, data: {}, message: 'Failed to fetch workloads' });
+  }
+});
+
+router.get('/available/:role', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) => {
+  try {
+    const role = String(req.params.role || '').toUpperCase();
+    const validRoles = ['FABRIC_MAN', 'CUTTER', 'TAILOR'];
+
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({ success: false, data: {}, message: 'Invalid role' });
+    }
+
+    const workers = await assignmentService.getAvailableWorkers(role);
+    res.json({ success: true, data: { workers }, message: 'Available workers fetched' });
+  } catch (error) {
+    console.error('assignment/available error:', error);
+    res.status(500).json({ success: false, data: {}, message: 'Failed to fetch available workers' });
+  }
+});
+
+export default router;

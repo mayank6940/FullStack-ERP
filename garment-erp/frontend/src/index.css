@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply text-base;
+}
+
+button {
+  @apply min-h-[56px];
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  body {
+    @apply text-base;
+  }
+
+  button {
+    @apply min-h-[56px];
+  }
+}

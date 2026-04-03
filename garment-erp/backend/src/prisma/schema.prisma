@@ -1,0 +1,220 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Employee {
+  id           String    @id @default(uuid())
+  empId        String    @unique
+  name         String
+  designation  String
+  role         Role
+  pin          String? // hashed 6-digit PIN for mobile roles
+  password     String? // hashed password for Admin and Manager
+  isActive     Boolean   @default(true)
+  isFirstLogin Boolean   @default(true)
+  lastLogin    DateTime?
+
+  // Relations
+  assignedOrders   OrderAssignment[]
+  rejections       Rejection[]             @relation("RejectedByEmployee")
+  activityLogs     ActivityLog[]
+  csvBatches       CsvBatch[]              @relation("UploadedByEmployee")
+  mappingTemplates ColumnMappingTemplate[] @relation("MappingCreatedBy")
+  statusChanges    OrderStatusHistory[]    @relation("StatusChangedBy")
+  updatedSettings  SystemSetting[]         @relation("SystemSettingUpdatedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("employees")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  FABRIC_MAN
+  CUTTER
+  TAILOR
+  SUPERVISOR
+}
+
+model Order {
+  id            String      @id @default(uuid())
+  orderCode     String      @unique
+  csvBatchId    String
+  size          OrderSize
+  status        OrderStatus @default(RECEIVED)
+  details       Json // flexible order fields from CSV
+  parentOrderId String? // for sub-orders when splitting large orders
+
+  // Relations
+  assignments   OrderAssignment[]
+  rejections    Rejection[]
+  activityLogs  ActivityLog[]
+  statusHistory OrderStatusHistory[]
+  csvBatch      CsvBatch             @relation(fields: [csvBatchId], references: [id], onDelete: Restrict)
+  parentOrder   Order?               @relation("ParentOrder", fields: [parentOrderId], references: [id], onDelete: SetNull)
+  subOrders     Order[]              @relation("ParentOrder")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([csvBatchId])
+  @@map("orders")
+}
+
+enum OrderSize {
+  SMALL
+  MEDIUM
+  LARGE
+}
+
+enum OrderStatus {
+  RECEIVED
+  ASSIGNED
+  FABRIC_IN_PROGRESS
+  FABRIC_DONE
+  CUTTING_IN_PROGRESS
+  CUTTING_DONE
+  TAILOR_IN_PROGRESS
+  TAILOR_DONE
+  QC_IN_PROGRESS
+  COMPLETED
+  REJECTED
+}
+
+model OrderAssignment {
+  id          String    @id @default(uuid())
+  orderId     String
+  employeeId  String
+  role        Role // which role this assignment is for
+  assignedAt  DateTime  @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  // Relations
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId])
+  @@index([orderId])
+  @@map("order_assignments")
+}
+
+model Rejection {
+  id             String          @id @default(uuid())
+  orderId        String
+  rejectedBy     String // employee id of supervisor
+  routedTo       Role // FABRIC_MAN, CUTTER, TAILOR
+  reason         String
+  reasonCategory RejectionReason
+  resolvedAt     DateTime?
+
+  // Relations
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  supervisor Employee @relation("RejectedByEmployee", fields: [rejectedBy], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@map("rejections")
+}
+
+enum RejectionReason {
+  FABRIC_QUALITY
+  WRONG_CUT
+  STITCHING_ISSUE
+  OTHER
+}
+
+model ActivityLog {
+  id         String  @id @default(uuid())
+  employeeId String
+  action     String // e.g. ORDER_STATUS_UPDATED, LOGIN, CSV_UPLOADED
+  orderId    String?
+  metadata   Json? // any extra context
+
+  // Relations
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([employeeId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+model CsvBatch {
+  id          String         @id @default(uuid())
+  filename    String
+  uploadedBy  String // employee id
+  totalOrders Int
+  status      CsvBatchStatus @default(PENDING)
+
+  // Relations
+  uploader Employee @relation("UploadedByEmployee", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  orders   Order[]
+
+  createdAt DateTime @default(now())
+
+  @@map("csv_batches")
+}
+
+enum CsvBatchStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ColumnMappingTemplate {
+  id        String   @id @default(uuid())
+  name      String
+  signature String
+  mapping   Json
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creator Employee @relation("MappingCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@unique([createdBy, signature])
+  @@map("column_mapping_templates")
+}
+
+model OrderStatusHistory {
+  id         String      @id @default(uuid())
+  orderId    String
+  fromStatus OrderStatus
+  toStatus   OrderStatus
+  changedBy  String?
+  metadata   Json?
+  createdAt  DateTime    @default(now())
+
+  order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  employee Employee? @relation("StatusChangedBy", fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("order_status_history")
+}
+
+model SystemSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  updater Employee? @relation("SystemSettingUpdatedBy", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@map("system_settings")
+}
