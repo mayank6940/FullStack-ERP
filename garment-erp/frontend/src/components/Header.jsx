@@ -1,5 +1,4 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import api from '../services/api';
@@ -8,7 +7,6 @@ import LanguageToggle from './LanguageToggle';
 export const DesktopHeader = () => {
   const { user, logout } = useAuth();
   const { t } = useLanguage();
-  const navigate = useNavigate();
 
   const handleLogout = async () => {
     try {
@@ -16,8 +14,9 @@ export const DesktopHeader = () => {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      sessionStorage.removeItem('setupEmpId');
       logout();
-      navigate('/login');
+      window.location.assign('/login');
     }
   };
 
@@ -46,7 +45,6 @@ export const DesktopHeader = () => {
 export const MobileHeader = () => {
   const { user, logout } = useAuth();
   const { t } = useLanguage();
-  const navigate = useNavigate();
 
   const handleLogout = async () => {
     try {
@@ -54,8 +52,9 @@ export const MobileHeader = () => {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
+      sessionStorage.removeItem('setupEmpId');
       logout();
-      navigate('/login');
+      window.location.assign('/login');
     }
   };
 

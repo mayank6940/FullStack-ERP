@@ -257,9 +257,14 @@ router.post('/refresh', async (req, res) => {
 });
 
 // POST /api/auth/logout
-// Clear refresh token cookie
-router.post('/logout', authMiddleware, async (req, res) => {
+// Clear auth cookies even when token is expired or invalid.
+router.post('/logout', async (req, res) => {
   try {
+    const bearerToken = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7)
+      : null;
+    const accessToken = req.cookies.accessToken || bearerToken;
+
     const clearCookieOptions = {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -270,8 +275,17 @@ router.post('/logout', authMiddleware, async (req, res) => {
     res.clearCookie('accessToken', clearCookieOptions);
     res.clearCookie('refreshToken', clearCookieOptions);
 
-    // Log logout activity
-    await logActivity(prisma, req.user.id, 'LOGOUT');
+    // Best-effort activity log only when the access token can be verified.
+    if (accessToken) {
+      try {
+        const decoded = jwt.verify(accessToken, process.env.JWT_ACCESS_SECRET);
+        if (decoded?.id) {
+          await logActivity(prisma, decoded.id, 'LOGOUT');
+        }
+      } catch {
+        // Ignore invalid/expired token on logout.
+      }
+    }
 
     res.json({ success: true, data: {}, message: 'Logged out successfully' });
   } catch (error) {
