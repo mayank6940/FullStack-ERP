@@ -602,13 +602,17 @@ const ManagerPortal = () => {
       await api.post('/orders/csv-confirm', {
         filename: 'orders.csv',
         approvedRows: previewResult.report.validRows
-      }, { timeout: 120000 });
+      }, { timeout: 300000 });
 
       await fetchData();
       setPreviewResult(null);
       setInvalidRows([]);
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to confirm order import');
+      if (err.code === 'ECONNABORTED') {
+        setError('Order import timed out. Please try a smaller CSV batch.');
+      } else {
+        setError(err.response?.data?.message || 'Failed to confirm order import');
+      }
     } finally {
       setCsvLoading(false);
     }

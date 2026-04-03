@@ -1,5 +1,5 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import csv from 'csv-parser';
 import { Readable } from 'stream';
 import { authMiddleware, roleGuard } from '../middleware/auth.js';
@@ -320,6 +320,20 @@ const parseDateRange = (fromDate, toDate) => {
   return { start, end };
 };
 
+const requiredWorkersPerRoleFromRows = (rows = []) => {
+  let required = 1;
+
+  for (const row of rows) {
+    const normalized = normalizeSize(row?.size);
+    if (normalized === 'MEDIUM' || normalized === 'LARGE') {
+      required = 2;
+      break;
+    }
+  }
+
+  return required;
+};
+
 const getWeekStart = () => {
   const now = new Date();
   const day = now.getDay();
@@ -599,6 +613,22 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
       return res.status(400).json({ success: false, data: {}, message: 'approvedRows is required' });
     }
 
+    const requiredPerRole = requiredWorkersPerRoleFromRows(approvedRows);
+    for (const role of ['FABRIC_MAN', 'CUTTER', 'TAILOR']) {
+      const available = await assignmentService.getAvailableWorkers(role);
+      if (available.length < requiredPerRole) {
+        return res.status(400).json({
+          success: false,
+          data: {
+            role,
+            required: requiredPerRole,
+            available: available.length
+          },
+          message: `Insufficient active workers for ${role}. Required: ${requiredPerRole}, available: ${available.length}`
+        });
+      }
+    }
+
     const batch = await prisma.csvBatch.create({
       data: {
         filename,
@@ -696,7 +726,16 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
     });
   } catch (error) {
     console.error('orders/csv-confirm error:', error);
-    res.status(500).json({ success: false, data: {}, message: 'Failed to confirm order CSV import' });
+    if (error?.code === 'P2002') {
+      return res.status(409).json({ success: false, data: {}, message: 'Duplicate order code detected while importing CSV' });
+    }
+
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      return res.status(500).json({ success: false, data: {}, message: `Database error during CSV import (${error.code})` });
+    }
+
+    const message = error?.message || 'Failed to confirm order CSV import';
+    res.status(500).json({ success: false, data: {}, message });
   }
 });
 
