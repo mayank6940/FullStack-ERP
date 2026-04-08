@@ -1,7 +1,10 @@
 import React from 'react';
 import StatusBadge from './StatusBadge';
+import CsvFieldList from './CsvFieldList';
 
 const OrderCard = ({ order, onTap, subtitle }) => {
+  const companyFields = order.details?.companyFields || {};
+
   return (
     <button
       type="button"
@@ -14,7 +17,7 @@ const OrderCard = ({ order, onTap, subtitle }) => {
       </div>
       <p className="mt-2 text-[15px] font-semibold text-[#223242]">{order.details?.articleName || '-'}</p>
       {subtitle && <p className="mt-1 text-sm text-[#4f5a66]">{subtitle}</p>}
-      <p className="mt-1 text-sm text-[#4f5a66]">Qty: {order.details?.quantity ?? '-'}</p>
+      <CsvFieldList fields={companyFields} className="mt-3" compact />
     </button>
   );
 };

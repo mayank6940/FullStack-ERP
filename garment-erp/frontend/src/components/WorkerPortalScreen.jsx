@@ -7,6 +7,7 @@ import SuccessScreen from './SuccessScreen';
 import StatusBadge from './StatusBadge';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import CsvFieldList from './CsvFieldList';
 
 const WorkerPortalScreen = ({
   role,
@@ -15,6 +16,8 @@ const WorkerPortalScreen = ({
   startToStatus,
   doneStatus,
   doneToStatus,
+  startSuccessMessageKey = 'worker.workStarted',
+  doneSuccessMessageKey,
   successMessageKey,
   subtitleGetter,
   titleKey
@@ -32,6 +35,7 @@ const WorkerPortalScreen = ({
   const [buttonLoading, setButtonLoading] = useState(false);
   const [error, setError] = useState('');
   const [successVisible, setSuccessVisible] = useState(false);
+  const [successMessageToShow, setSuccessMessageToShow] = useState(doneSuccessMessageKey || successMessageKey);
 
   const loadHomeData = async () => {
     try {
@@ -75,12 +79,13 @@ const WorkerPortalScreen = ({
     return t('worker.youHaveXOrders').replace('X', String(orders.length));
   }, [orders.length, t]);
 
-  const performStatusUpdate = async (nextStatus) => {
+  const performStatusUpdate = async (nextStatus, actionType = 'done') => {
     if (!selectedOrder?.id) return;
     try {
       setButtonLoading(true);
       setError('');
       await api.patch(`/orders/${selectedOrder.id}/status`, { newStatus: nextStatus });
+      setSuccessMessageToShow(actionType === 'start' ? startSuccessMessageKey : (doneSuccessMessageKey || successMessageKey));
       setSuccessVisible(true);
       await loadHomeData();
     } catch (err) {
@@ -95,6 +100,27 @@ const WorkerPortalScreen = ({
   const isCompletedState = selectedOrder && selectedOrder.status === doneToStatus;
   const panelClass = 'rounded-2xl border border-[#d9d1c3] bg-white/95 shadow-[0_8px_20px_rgba(34,42,54,0.08)] p-4';
   const subtlePanelClass = 'rounded-xl border border-[#e5ded2] bg-[#fbf9f4] p-3';
+
+  const getDisplayStatus = (order) => {
+    if (!order?.status) return 'ASSIGNED';
+    if (startStatuses.includes(order.status)) return 'ASSIGNED';
+    if (order.status === doneStatus) return startToStatus;
+    return order.status;
+  };
+
+  const getDedupedSubtitle = (order) => {
+    if (!subtitleGetter) return '';
+
+    const subtitle = String(subtitleGetter(order) || '').trim();
+    if (!subtitle) return '';
+
+    const articleName = String(order?.details?.articleName || '').trim();
+    const products = String(order?.details?.companyFields?.Products || '').trim();
+    const orderCode = String(order?.orderCode || '').trim();
+
+    if (subtitle === articleName || subtitle === products || subtitle === orderCode) return '';
+    return subtitle;
+  };
 
   const detailView = selectedOrder && (
     <div className="space-y-3">
@@ -111,14 +137,18 @@ const WorkerPortalScreen = ({
         )}
 
         <div className="mt-3">
-          <StatusBadge status={selectedOrder.status} returned={selectedOrder.isReturned} />
+          <StatusBadge status={getDisplayStatus(selectedOrder)} returned={selectedOrder.isReturned} />
         </div>
 
         <div className="mt-4 text-sm text-[#2b3a48] space-y-1">
-          <p>{t('worker.fabricType')}: {selectedOrder.details?.companyFields?.FabricName || selectedOrder.details?.fabricType || '-'}</p>
           <p>{t('worker.colour')}: {selectedOrder.details?.companyFields?.Colour || '-'}</p>
-          <p>{t('worker.quantity')}: {selectedOrder.details?.quantity ?? '-'}</p>
-          <p>{t('worker.instructions')}: {selectedOrder.details?.stitchingInstructions || selectedOrder.details?.pattern || '-'}</p>
+        </div>
+
+        <div className="mt-4 border-t pt-4">
+          <p className="text-sm font-bold text-[#132130] mb-2">All CSV Fields</p>
+          <CsvFieldList
+            fields={selectedOrder.details?.companyFields || {}}
+          />
         </div>
       </div>
 
@@ -126,7 +156,7 @@ const WorkerPortalScreen = ({
         {canStart && (
           <ActionButton
             label={t('worker.startWork')}
-            onClick={() => performStatusUpdate(startToStatus)}
+            onClick={() => performStatusUpdate(startToStatus, 'start')}
             isLoading={buttonLoading}
             variant="primary"
           />
@@ -136,7 +166,7 @@ const WorkerPortalScreen = ({
           <>
             <ActionButton
               label={t('worker.markDone')}
-              onClick={() => performStatusUpdate(doneToStatus)}
+              onClick={() => performStatusUpdate(doneToStatus, 'done')}
               isLoading={buttonLoading}
               variant="primary"
             />
@@ -173,7 +203,7 @@ const WorkerPortalScreen = ({
   if (successVisible) {
     return (
       <SuccessScreen
-        message={t(successMessageKey)}
+        message={t(successMessageToShow)}
         onBack={() => {
           setSuccessVisible(false);
           setSelectedOrder(null);
@@ -207,8 +237,8 @@ const WorkerPortalScreen = ({
                 {orders.map((order) => (
                   <OrderCard
                     key={order.id}
-                    order={order}
-                    subtitle={subtitleGetter ? subtitleGetter(order) : ''}
+                    order={{ ...order, status: getDisplayStatus(order) }}
+                    subtitle={getDedupedSubtitle(order)}
                     onTap={() => {
                       setSelectedOrder(order);
                       setShowIssueForm(false);

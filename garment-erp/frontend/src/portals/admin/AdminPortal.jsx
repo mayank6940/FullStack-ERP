@@ -21,6 +21,7 @@ const AdminPortal = () => {
   const [issueResolutionDrafts, setIssueResolutionDrafts] = useState({});
   const [issueActionLoadingId, setIssueActionLoadingId] = useState('');
   const [employeeTab, setEmployeeTab] = useState('active');
+  const [employeeSearchQuery, setEmployeeSearchQuery] = useState('');
   const [activityFilters, setActivityFilters] = useState({ employeeId: '', role: '', action: '', fromDate: '', toDate: '' });
   const [orderFilters, setOrderFilters] = useState({ status: '', size: '' });
   const [manualEmployee, setManualEmployee] = useState({ empId: '', name: '', designation: '', role: '' });
@@ -88,6 +89,26 @@ const AdminPortal = () => {
 
   const activeEmployees = useMemo(() => employees.filter((e) => e.isActive), [employees]);
   const leftCompanyEmployees = useMemo(() => employees.filter((e) => !e.isActive), [employees]);
+
+  const filteredActiveEmployees = useMemo(() => {
+    const query = employeeSearchQuery.trim().toLowerCase();
+    if (!query) return activeEmployees;
+
+    return activeEmployees.filter((emp) => {
+      const haystack = `${emp.empId || ''} ${emp.name || ''} ${emp.role || ''} ${emp.designation || ''}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [activeEmployees, employeeSearchQuery]);
+
+  const filteredLeftCompanyEmployees = useMemo(() => {
+    const query = employeeSearchQuery.trim().toLowerCase();
+    if (!query) return leftCompanyEmployees;
+
+    return leftCompanyEmployees.filter((emp) => {
+      const haystack = `${emp.empId || ''} ${emp.name || ''} ${emp.role || ''} ${emp.designation || ''}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [leftCompanyEmployees, employeeSearchQuery]);
 
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
@@ -925,6 +946,15 @@ const AdminPortal = () => {
                 <button type="button" onClick={() => setEmployeeTab('active')} className={`px-3 py-2 rounded-xl font-semibold ${employeeTab === 'active' ? 'bg-[#2d5a66] text-white' : 'bg-[#ece6da] text-[#2d3a48]'}`}>Active Employees</button>
                 <button type="button" onClick={() => setEmployeeTab('left')} className={`px-3 py-2 rounded-xl font-semibold ${employeeTab === 'left' ? 'bg-[#2d5a66] text-white' : 'bg-[#ece6da] text-[#2d3a48]'}`}>Left Company / Inactive</button>
               </div>
+              <div className="mb-3">
+                <input
+                  type="text"
+                  value={employeeSearchQuery}
+                  onChange={(e) => setEmployeeSearchQuery(e.target.value)}
+                  placeholder="Search employee by EmpID, name, role or designation"
+                  className={inputClass}
+                />
+              </div>
               <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className={`${tableHeadClass} sticky top-0`}>
@@ -938,7 +968,7 @@ const AdminPortal = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {(employeeTab === 'active' ? activeEmployees : leftCompanyEmployees).map((emp) => (
+                    {(employeeTab === 'active' ? filteredActiveEmployees : filteredLeftCompanyEmployees).map((emp) => (
                       <tr key={emp.id} className="border-b">
                         <td className="p-2 font-mono">{emp.empId}</td>
                         <td className="p-2">{emp.name}</td>
@@ -967,6 +997,11 @@ const AdminPortal = () => {
                         </td>
                       </tr>
                     ))}
+                    {(employeeTab === 'active' ? filteredActiveEmployees : filteredLeftCompanyEmployees).length === 0 && (
+                      <tr>
+                        <td className="p-2 text-gray-500" colSpan={6}>No employees found for this search.</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

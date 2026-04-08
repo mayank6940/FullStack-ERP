@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import MobileLayout from '../../components/MobileLayout';
 import ActionButton from '../../components/ActionButton';
 import OrderCard from '../../components/OrderCard';
+import CsvFieldList from '../../components/CsvFieldList';
 import StatusBadge from '../../components/StatusBadge';
 import SuccessScreen from '../../components/SuccessScreen';
 import { useLanguage } from '../../context/LanguageContext';
@@ -191,11 +192,11 @@ const SupervisorPortal = () => {
                 </div>
               )}
 
-              <div className="mt-4 text-base text-gray-800 space-y-1">
-                <p>{t('worker.fabricType')}: {selectedOrder.details?.companyFields?.FabricName || selectedOrder.details?.fabricType || '-'}</p>
-                <p>{t('worker.quantity')}: {selectedOrder.details?.quantity ?? '-'}</p>
-                <p>{t('supervisor.articleType')}: {selectedOrder.details?.articleName || '-'}</p>
-                <p>{t('supervisor.notes')}: {selectedOrder.details?.notes || selectedOrder.details?.pattern || '-'}</p>
+              <div className="mt-4 border-t pt-4">
+                <p className="text-sm font-bold text-gray-800 mb-2">All CSV Fields</p>
+                <CsvFieldList
+                  fields={selectedOrder.details?.companyFields || {}}
+                />
               </div>
 
               <div className="mt-4 text-sm text-gray-700 space-y-1">

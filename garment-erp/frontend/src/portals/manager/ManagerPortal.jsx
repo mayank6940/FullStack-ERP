@@ -18,14 +18,12 @@ const ManagerPortal = () => {
   const [pageLoading, setPageLoading] = useState(false);
   const [csvLoading, setCsvLoading] = useState(false);
   const [error, setError] = useState('');
+  const [employeeSearchQuery, setEmployeeSearchQuery] = useState('');
 
   const [csvContent, setCsvContent] = useState('OrderCode,ArticleName,Quantity,FabricType,Size,DeliveryDate\n');
-  const [headers, setHeaders] = useState([]);
-  const [headerOptions, setHeaderOptions] = useState([]);
-  const [mapping, setMapping] = useState({});
+  const [selectedCsvFileName, setSelectedCsvFileName] = useState('');
   const [previewResult, setPreviewResult] = useState(null);
   const [invalidRows, setInvalidRows] = useState([]);
-  const [templates, setTemplates] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedTimeline, setSelectedTimeline] = useState([]);
   const [visibilityRole, setVisibilityRole] = useState('FABRIC_MAN');
@@ -82,20 +80,6 @@ const ManagerPortal = () => {
   const tableScrollClass = 'overflow-x-auto max-h-[420px] overflow-y-auto rounded-xl border border-[#e1d8c9] bg-white';
   const tableScrollCompactClass = 'overflow-x-auto max-h-[340px] overflow-y-auto rounded-xl border border-[#e1d8c9] bg-white';
   const sectionTitleClass = 'text-xl font-bold text-[#132130] mb-3';
-
-  const defaultMappingFields = [
-    'OrderCode', 'Products', 'StyleCode', 'FabricName', 'Colour', 'Pattern', 'FabricSize', 'Lining', 'Channel',
-    'UniwareCreatedAt', 'ChannelCreatedAt', 'DisplayOrderNo', 'PaymentType', 'OrderPrice', 'SellerSKUs',
-    'Quantity', 'Size', 'ArticleName', 'FabricType', 'DeliveryDate'
-  ];
-  const [mappingFields, setMappingFields] = useState(defaultMappingFields);
-
-  const isMapped = (field) => {
-    const value = mapping[field];
-    return Boolean(value && String(value).trim() && value !== '__SKIP__');
-  };
-
-  const hasAnySizeSource = ['Size', 'Products', 'SellerSKUs', 'StyleCode'].some((field) => isMapped(field));
 
   const [filters, setFilters] = useState({
     status: '',
@@ -170,9 +154,34 @@ const ManagerPortal = () => {
       if (activityFilters.action && item.action !== activityFilters.action) return false;
       if (activityFilters.fromDate && new Date(item.createdAt) < new Date(activityFilters.fromDate)) return false;
       if (activityFilters.toDate && new Date(item.createdAt) > new Date(activityFilters.toDate + 'T23:59:59')) return false;
+      if (employeeSearchQuery.trim()) {
+        const query = employeeSearchQuery.trim().toLowerCase();
+        const haystack = `${item.employee?.name || ''} ${item.employee?.empId || ''} ${item.employee?.role || ''}`.toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
       return true;
     });
-  }, [activities, activityFilters]);
+  }, [activities, activityFilters, employeeSearchQuery]);
+
+  const filteredWorkloads = useMemo(() => {
+    const query = employeeSearchQuery.trim().toLowerCase();
+    if (!query) return workloads;
+
+    return workloads.filter((row) => {
+      const haystack = `${row.name || ''} ${row.empId || ''} ${row.role || ''}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [workloads, employeeSearchQuery]);
+
+  const filteredEmployeeOptions = useMemo(() => {
+    const query = employeeSearchQuery.trim().toLowerCase();
+    if (!query) return employees;
+
+    return employees.filter((emp) => {
+      const haystack = `${emp.name || ''} ${emp.empId || ''} ${emp.role || ''} ${emp.designation || ''}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [employees, employeeSearchQuery]);
 
   const reportedIssueActivities = useMemo(() => (
     filteredActivities.filter((item) => item.action === 'ORDER_ISSUE_REPORTED')
@@ -224,13 +233,11 @@ const ManagerPortal = () => {
       setPageLoading(true);
       setError('');
 
-      const [ordersRes, employeesRes, workloadRes, activityRes, templatesRes, mappingFieldsRes, rejectionStatsRes, settingsRes, issueRes] = await Promise.allSettled([
+      const [ordersRes, employeesRes, workloadRes, activityRes, rejectionStatsRes, settingsRes, issueRes] = await Promise.allSettled([
         api.get('/orders?limit=200'),
         api.get('/employees?limit=200'),
         api.get('/assignment/workload'),
         api.get('/activity?limit=50'),
-        api.get('/orders/column-mappings'),
-        api.get('/orders/mapping-fields'),
         api.get('/orders/rejection-stats'),
         api.get('/admin/settings/public'),
         api.get('/orders/reported-issues?status=open&limit=200')
@@ -248,15 +255,6 @@ const ManagerPortal = () => {
       }
       if (activityRes.status === 'fulfilled') {
         setActivities(activityRes.value.data.data.items || []);
-      }
-      if (templatesRes.status === 'fulfilled') {
-        setTemplates(templatesRes.value.data.data.templates || []);
-      }
-      if (mappingFieldsRes.status === 'fulfilled') {
-        const fields = mappingFieldsRes.value.data?.data?.fields;
-        if (Array.isArray(fields) && fields.length > 0) {
-          setMappingFields(fields);
-        }
       }
       if (rejectionStatsRes.status === 'fulfilled') {
         setRejectionStats(rejectionStatsRes.value.data?.data || {
@@ -416,33 +414,6 @@ const ManagerPortal = () => {
     }
   };
 
-  const parseCsvHeaders = (content) => {
-    const firstLine = content.split(/\r?\n/).find((line) => line.trim().length > 0);
-    if (!firstLine) return [];
-
-    const rawHeaders = firstLine.split(',').map((h) => h.trim()).filter(Boolean);
-
-    // Keep frontend header keys aligned with backend CSV parser behavior.
-    // Duplicate "Fabric" columns are renamed deterministically so manager can map both fields correctly.
-    let fabricCounter = 0;
-    return rawHeaders.map((header) => {
-      const lower = String(header || '').trim().toLowerCase();
-      if (lower === 'fabric') {
-        fabricCounter += 1;
-        if (fabricCounter === 1) return 'Fabric_1_Name';
-        if (fabricCounter === 2) return 'Fabric_2_Size';
-        return `Fabric_${fabricCounter}`;
-      }
-      return header;
-    });
-  };
-
-  const formatHeaderLabel = (header) => {
-    if (header === 'Fabric_1_Name') return 'Fabric (Name)';
-    if (header === 'Fabric_2_Size') return 'Fabric (Weight/Size)';
-    return header;
-  };
-
   const handleOrderCsvUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -454,16 +425,7 @@ const ManagerPortal = () => {
 
       const text = await file.text();
       setCsvContent(text);
-      const detectedHeaders = parseCsvHeaders(text);
-      setHeaders(detectedHeaders);
-      setHeaderOptions(detectedHeaders.map((header) => ({
-        value: header,
-        label: formatHeaderLabel(header)
-      })));
-
-      // Manager-controlled mapping: default every field to blank and let user choose.
-      const blankMapping = Object.fromEntries(mappingFields.map((field) => [field, '']));
-      setMapping(blankMapping);
+      setSelectedCsvFileName(file.name || '');
 
       // Reset previous run state for fresh upload.
       setPreviewResult(null);
@@ -477,25 +439,11 @@ const ManagerPortal = () => {
   };
 
   const handlePreview = async () => {
-    const missingRequired = [];
-    if (!isMapped('OrderCode')) {
-      missingRequired.push('OrderCode');
-    }
-    if (!hasAnySizeSource) {
-      missingRequired.push('Size source (Size/Products/SellerSKUs/StyleCode)');
-    }
-
-    if (missingRequired.length > 0) {
-      setError(`Please map required fields before preview: ${missingRequired.join(', ')}`);
-      return;
-    }
-
     try {
       setCsvLoading(true);
       setError('');
       const response = await api.post('/orders/csv-preview', {
-        csvContent,
-        columnMapping: mapping
+        csvContent
       }, { timeout: 120000 });
       setPreviewResult(response.data.data);
       setInvalidRows(response.data.data.report?.invalidRows || []);
@@ -554,44 +502,6 @@ const ManagerPortal = () => {
     });
   };
 
-  const handleSaveTemplate = async () => {
-    if (!previewResult?.signature) return;
-    try {
-      setCsvLoading(true);
-      await api.post('/orders/save-column-mapping', {
-        name: `Template ${new Date().toLocaleString()}`,
-        signature: previewResult.signature,
-        mapping
-      }, { timeout: 120000 });
-      await fetchData();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to save column mapping template');
-    } finally {
-      setCsvLoading(false);
-    }
-  };
-
-  const handleUseTemplate = (templateId) => {
-    const selected = templates.find((t) => t.id === templateId);
-    if (selected) {
-      setMapping(selected.mapping || {});
-    }
-  };
-
-  const handleMappingChange = (field, value) => {
-    setMapping((prev) => ({ 
-      ...prev, 
-      [field]: value
-    }));
-  };
-
-  const handleHeadersRefresh = () => {
-    if (csvContent && csvContent.length > 0) {
-      const detectedHeaders = parseCsvHeaders(csvContent);
-      setHeaders(detectedHeaders);
-    }
-  };
-
   const handleConfirmImport = async () => {
     if (!previewResult?.report?.validRows?.length) return;
 
@@ -626,8 +536,6 @@ const ManagerPortal = () => {
       setCsvLoading(true);
       setError('');
       await api.delete('/orders/all', { timeout: 120000 });
-
-      // Clear order-import preview context and refresh dashboard/order data.
       setPreviewResult(null);
       setInvalidRows([]);
       await fetchData();
@@ -660,18 +568,6 @@ const ManagerPortal = () => {
         <div className={statCardClass}><p className="text-sm text-gray-500">Rejected</p><p className="text-2xl font-bold">{dashboardSummary.rejected}</p></div>
         <div className={`${statCardClass} border-red-200 bg-red-50`}><p className="text-sm text-gray-500">Orders Rejected Today</p><p className="text-2xl font-bold text-red-600">{rejectionStats.summary?.rejectedToday || 0}</p></div>
         <div className={`${statCardClass} border-red-200 bg-red-50`}><p className="text-sm text-gray-500">Rejection Rate This Week</p><p className="text-2xl font-bold text-red-600">{rejectionStats.summary?.rejectionRateThisWeek || 0}%</p></div>
-      </div>
-
-      <div className={panelClass}>
-        <h3 className={sectionTitleClass}>Order Pipeline</h3>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
-          {Object.entries(pipelineCounts).map(([status, count]) => (
-            <div key={status} className={statCardClass}>
-              <p className="text-gray-500">{status}</p>
-              <p className="text-lg font-semibold">{count}</p>
-            </div>
-          ))}
-        </div>
       </div>
 
       <div className={panelClass}>
@@ -721,78 +617,27 @@ const ManagerPortal = () => {
         <div className="mb-4">
           <label className="block font-semibold mb-2">Step 1: Upload CSV</label>
           <input type="file" accept=".csv" onChange={handleOrderCsvUpload} />
+          <p className="mt-2 text-sm text-gray-600">Column mapping is no longer required here. Upload the file, then preview it directly.</p>
+          {selectedCsvFileName && (
+            <p className="mt-2 inline-flex items-center rounded-full bg-green-50 px-3 py-1 text-sm font-semibold text-green-700 border border-green-200">
+              Uploaded: {selectedCsvFileName}
+            </p>
+          )}
         </div>
-
-        {headers.length > 0 && (
-          <div className="mb-4">
-            <label className="block font-semibold mb-2">Step 2: Column Mapping (Manager Controlled)</label>
-            <p className="text-sm text-gray-600 mb-3">All fields are blank by default. Select only the columns you want to include.</p>
-            <div className="mb-3 p-3 rounded border border-yellow-300 bg-yellow-50 text-sm text-yellow-900">
-              Required before preview: select <span className="font-semibold">OrderCode</span> and at least one size source from
-              <span className="font-semibold"> Size / Products / SellerSKUs / StyleCode</span>.
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {mappingFields.map((field) => (
-                <div key={field}>
-                  <label className="text-sm text-gray-600">{field}</label>
-                  <select
-                    value={mapping[field] || ''}
-                    onChange={(e) => handleMappingChange(field, e.target.value)}
-                    className={`${inputClass} ${(field === 'OrderCode' && !isMapped('OrderCode')) || (['Size', 'Products', 'SellerSKUs', 'StyleCode'].includes(field) && !hasAnySizeSource) ? 'border-red-400 bg-red-50' : ''}`}
-                  >
-                    <option value="">-- Select Column --</option>
-                    <option value="__SKIP__">Do not include</option>
-                    {headerOptions.map((option) => (
-                      <option key={`${field}-${option.value}`} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         <div className="flex gap-3 mb-4">
           <button onClick={handlePreview} disabled={csvLoading || pageLoading} className={primaryButtonClass}>{csvLoading ? 'Processing...' : 'Preview CSV'}</button>
-          <button onClick={handleSaveTemplate} disabled={csvLoading || pageLoading || !previewResult} className={secondaryButtonClass}>Save Mapping Template</button>
           <button onClick={handleConfirmImport} disabled={csvLoading || pageLoading || !previewResult?.report?.validRows?.length} className={secondaryButtonClass}>Approve Import</button>
         </div>
 
-        {templates.length > 0 && (
-          <div className="mb-4">
-            <label className="block font-semibold mb-2">Use Saved Template</label>
-            <select onChange={(e) => handleUseTemplate(e.target.value)} className={`${inputClass} md:w-80`} defaultValue="">
-              <option value="">-- Select template --</option>
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>{template.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
         {previewResult && (
           <div className={subtlePanelClass}>
-            <h4 className="font-bold mb-2">Step 3: Validation Report</h4>
+            <h4 className="font-bold mb-2">Step 2: Validation Report</h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-4">
               <div className="bg-green-100 rounded p-2">Valid rows: {previewResult.summary.validRows}</div>
               <div className="bg-yellow-100 rounded p-2">Invalid rows: {previewResult.summary.invalidRows}</div>
               <div className="bg-red-100 rounded p-2">Duplicate rows: {previewResult.summary.duplicateRows}</div>
             </div>
-
-            {previewResult.companyDisplayFields && (
-              <div className="mt-4 border-t pt-4">
-                <h5 className="font-semibold mb-2">Company Display Fields Configuration:</h5>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
-                  {Object.entries(previewResult.companyDisplayFields).map(([key, label]) => (
-                    <div key={key} className="bg-blue-50 p-2 rounded">
-                      <p className="font-mono text-gray-600">{key}</p>
-                      <p className="text-gray-800">{label}</p>
-                      <p className="text-gray-500">{mapping[key] === '__SKIP__' ? 'Skipped' : mapping[key] ? `→ ${mapping[key]}` : 'Not mapped'}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {previewResult.report?.validRows?.length > 0 && (
               <div className="mt-4 border-t pt-4">
@@ -884,7 +729,7 @@ const ManagerPortal = () => {
 
       {previewResult?.report?.invalidRows?.length > 0 && (
         <div className={panelClass}>
-          <h3 className="text-xl font-bold mb-3">Step 4: Fix Invalid Rows Inline</h3>
+          <h3 className="text-xl font-bold mb-3">Step 3: Fix Invalid Rows Inline</h3>
           <div className="space-y-3 text-sm">
             {invalidRows.map((row, idx) => (
               <div key={`invalid-${row.rowNumber}-${idx}`} className={subtlePanelClass}>
@@ -954,6 +799,15 @@ const ManagerPortal = () => {
   const renderWorkload = () => (
     <div className={panelClass}>
       <h3 className={sectionTitleClass}>Employee Workload</h3>
+      <div className="mb-3">
+        <input
+          type="text"
+          value={employeeSearchQuery}
+          onChange={(e) => setEmployeeSearchQuery(e.target.value)}
+          placeholder="Search employee by EmpID, name, role or designation"
+          className={inputClass}
+        />
+      </div>
       <div className={tableScrollClass}>
         <table className="w-full text-sm">
           <thead className={`${tableHeadClass} sticky top-0`}>
@@ -967,7 +821,7 @@ const ManagerPortal = () => {
             </tr>
           </thead>
           <tbody>
-            {workloads.map((row) => {
+            {filteredWorkloads.map((row) => {
               const color = row.active >= 4 ? 'text-red-600' : row.active >= 2 ? 'text-yellow-600' : 'text-green-600';
               return (
                 <tr key={row.employeeId} className="border-b even:bg-[#fbf8f2]">
@@ -980,6 +834,11 @@ const ManagerPortal = () => {
                 </tr>
               );
             })}
+            {filteredWorkloads.length === 0 && (
+              <tr>
+                <td className="p-2 text-gray-500" colSpan={6}>No employees found for this search.</td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -989,10 +848,19 @@ const ManagerPortal = () => {
   const renderActivity = () => (
     <div className={panelClass}>
       <h3 className={sectionTitleClass}>Activity Monitor</h3>
+      <div className="mb-3">
+        <input
+          type="text"
+          value={employeeSearchQuery}
+          onChange={(e) => setEmployeeSearchQuery(e.target.value)}
+          placeholder="Search employee by EmpID, name, role or designation"
+          className={inputClass}
+        />
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-3 text-sm">
         <select value={activityFilters.employeeId} onChange={(e) => setActivityFilters((p) => ({ ...p, employeeId: e.target.value }))} className={inputClass}>
           <option value="">All Employees</option>
-          {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+          {filteredEmployeeOptions.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
         </select>
         <select value={activityFilters.role} onChange={(e) => setActivityFilters((p) => ({ ...p, role: e.target.value }))} className={inputClass}>
           <option value="">All Roles</option>

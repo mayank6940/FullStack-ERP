@@ -185,7 +185,77 @@ const mergeMappings = (inferredMapping, providedMapping = {}) => {
   return merged;
 };
 
-const inferHeaderMapping = (headers) => {
+const isNumericLikeCell = (value) => {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  const hasDigits = /\d/.test(text);
+  const hasLetters = /[a-z]/i.test(text);
+  if (!hasDigits) return false;
+  if (!hasLetters) return true;
+
+  const digitCount = (text.match(/\d/g) || []).length;
+  const letterCount = (text.match(/[a-z]/gi) || []).length;
+  return digitCount >= letterCount;
+};
+
+const inferFabricColumns = (headers, rows = []) => {
+  const fabricHeaders = headers.filter((header) => /^fabric/i.test(String(header || '').trim()));
+  if (fabricHeaders.length === 0) return { fabricName: null, fabricSize: null };
+
+  const scored = fabricHeaders.map((header) => {
+    let numericScore = 0;
+    let textScore = 0;
+
+    for (const row of rows) {
+      const value = row?.[header];
+      if (value === null || value === undefined || String(value).trim() === '') continue;
+
+      if (isNumericLikeCell(value)) numericScore += 1;
+      else textScore += 1;
+    }
+
+    return {
+      header,
+      numericScore,
+      textScore,
+      netScore: textScore - numericScore
+    };
+  });
+
+  const textCandidates = [...scored].sort((a, b) => (b.netScore - a.netScore) || (b.textScore - a.textScore));
+  const numericCandidates = [...scored].sort((a, b) => ((b.numericScore - b.textScore) - (a.numericScore - a.textScore)) || (b.numericScore - a.numericScore));
+
+  let fabricName = textCandidates[0]?.header || null;
+  let fabricSize = numericCandidates.find((candidate) => candidate.header !== fabricName)?.header || null;
+
+  if (!fabricSize && fabricHeaders.length > 1) {
+    fabricSize = fabricHeaders.find((header) => header !== fabricName) || null;
+  }
+
+  if (fabricName && fabricSize) {
+    const nameScore = scored.find((item) => item.header === fabricName);
+    const sizeScore = scored.find((item) => item.header === fabricSize);
+
+    if (nameScore && sizeScore && nameScore.numericScore > nameScore.textScore && sizeScore.textScore > sizeScore.numericScore) {
+      [fabricName, fabricSize] = [fabricSize, fabricName];
+    }
+  }
+
+  if (fabricHeaders.length === 1) {
+    const [only] = scored;
+    if (only && only.numericScore > only.textScore) {
+      fabricName = null;
+      fabricSize = only.header;
+    } else {
+      fabricName = only?.header || null;
+      fabricSize = null;
+    }
+  }
+
+  return { fabricName, fabricSize };
+};
+
+const inferHeaderMapping = (headers, rows = []) => {
   const mapped = {};
   const normalized = headers.map((h) => h.trim().toLowerCase());
 
@@ -233,6 +303,10 @@ const inferHeaderMapping = (headers) => {
   mapped.PaymentType = findField(['pymt', 'payment', 'payment type']);
   mapped.OrderPrice = findField(['order price', 'price']);
   mapped.DeliveryDate = findField(['delivery', 'due', 'created at', 'channel created at', 'uniware created at']);
+
+  const fabricColumns = inferFabricColumns(headers, rows);
+  if (fabricColumns.fabricName) mapped.FabricName = fabricColumns.fabricName;
+  if (fabricColumns.fabricSize) mapped.FabricSize = fabricColumns.fabricSize;
 
   return mapped;
 };
@@ -460,7 +534,7 @@ const buildMappedRows = async (rows, mapping) => {
 
 router.post('/csv-preview', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) => {
   try {
-    const { csvContent, columnMapping, templateId } = req.body;
+    const { csvContent } = req.body;
     if (!csvContent) {
       return res.status(400).json({ success: false, data: {}, message: 'CSV content is required' });
     }
@@ -468,24 +542,8 @@ router.post('/csv-preview', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
     const { headers, rows } = await withTimeout(parseCsv(csvContent), 30000, 'CSV parsing');
     const signature = getTemplateSignature(headers);
 
-    let effectiveMapping = null;
-    const inferredMapping = inferHeaderMapping(headers);
-
-    if (columnMapping && Object.keys(columnMapping).length > 0) {
-      effectiveMapping = mergeMappings(inferredMapping, columnMapping);
-    }
-    if (!effectiveMapping && templateId) {
-      const template = await prisma.columnMappingTemplate.findUnique({ where: { id: templateId } });
-      effectiveMapping = mergeMappings(inferredMapping, template?.mapping || {});
-    }
-
-    if (!effectiveMapping) {
-      const stored = await withTimeout(prisma.columnMappingTemplate.findFirst({
-        where: { createdBy: req.user.id, signature },
-        orderBy: { updatedAt: 'desc' }
-      }), 10000, 'Template lookup');
-      effectiveMapping = mergeMappings(inferredMapping, stored?.mapping || {});
-    }
+    const inferredMapping = inferHeaderMapping(headers, rows);
+    const effectiveMapping = inferredMapping;
 
     const missingRequired = REQUIRED_FIELDS.filter((field) => !effectiveMapping?.[field]);
     const hasAnySizeSource = Boolean(effectiveMapping?.Size || effectiveMapping?.Products || effectiveMapping?.SellerSKUs || effectiveMapping?.StyleCode);

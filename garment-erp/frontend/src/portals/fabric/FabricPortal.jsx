@@ -14,7 +14,7 @@ const FabricPortal = () => {
         doneStatus="FABRIC_IN_PROGRESS"
         doneToStatus="FABRIC_DONE"
         successMessageKey="worker.fabricSuccess"
-        subtitleGetter={(order) => order.details?.companyFields?.FabricName || order.details?.fabricType || '-'}
+        subtitleGetter={(order) => order.details?.companyFields?.FabricSize || order.details?.fabricSize || '-'}
       />
     </MobileLayout>
   );
