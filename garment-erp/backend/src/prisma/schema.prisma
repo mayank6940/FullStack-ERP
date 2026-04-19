@@ -107,6 +107,7 @@ model OrderAssignment {
 
   @@index([employeeId])
   @@index([orderId])
+  @@unique([orderId, role])
   @@map("order_assignments")
 }
 

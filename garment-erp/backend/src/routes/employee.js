@@ -552,8 +552,8 @@ router.get('/', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) 
       orderBy: { createdAt: 'desc' }
     });
 
-    // Employee roster changes infrequently, so short cache is safe.
-    res.set('Cache-Control', 'private, max-age=60');
+    // Employee roster must refresh immediately after mutations like delete/deactivate.
+    res.set('Cache-Control', 'no-store');
 
     res.json({
       success: true,
@@ -626,7 +626,7 @@ router.patch('/:id/reactivate', authMiddleware, roleGuard('ADMIN'), async (req, 
 });
 
 // DELETE /api/employees/:id
-// Permanent delete (Admin only, only if no assignments)
+// Permanent delete when safe; otherwise fall back to deactivation so employee can be removed from active use.
 router.delete('/:id', authMiddleware, roleGuard('ADMIN'), async (req, res) => {
   try {
     const employee = await prisma.employee.findUnique({
@@ -645,9 +645,20 @@ router.delete('/:id', authMiddleware, roleGuard('ADMIN'), async (req, res) => {
     });
 
     if (hasAssignments) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete employee with active assignments'
+      const deactivated = await prisma.employee.update({
+        where: { id: req.params.id },
+        data: { isActive: false }
+      });
+
+      await logActivity(prisma, req.user.id, 'EMPLOYEE_DELETED', null, {
+        empId: deactivated.empId,
+        mode: 'DEACTIVATED_DUE_TO_ASSIGNMENT_HISTORY'
+      });
+
+      return res.json({
+        success: true,
+        data: { empId: deactivated.empId, name: deactivated.name, isActive: deactivated.isActive },
+        message: 'Employee has assignment history, so it was deactivated instead of permanently deleted'
       });
     }
 

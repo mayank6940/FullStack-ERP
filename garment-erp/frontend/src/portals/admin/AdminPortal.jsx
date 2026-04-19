@@ -24,7 +24,7 @@ const AdminPortal = () => {
   const [employeeSearchQuery, setEmployeeSearchQuery] = useState('');
   const [activityFilters, setActivityFilters] = useState({ employeeId: '', role: '', action: '', fromDate: '', toDate: '' });
   const [orderFilters, setOrderFilters] = useState({ status: '', size: '' });
-  const [manualEmployee, setManualEmployee] = useState({ empId: '', name: '', designation: '', role: '' });
+  const [manualEmployee, setManualEmployee] = useState({ empId: '', name: '', role: '' });
   const [rejectionStats, setRejectionStats] = useState({
     summary: {
       rejectedToday: 0,
@@ -177,7 +177,7 @@ const AdminPortal = () => {
   const refreshAdminData = async () => {
     try {
       const [employeeRes, orderRes, activityRes, rejectionRes, issueRes] = await Promise.all([
-        api.get('/employees?limit=300'),
+        api.get(`/employees?limit=300&_=${Date.now()}`),
         api.get('/orders?limit=300'),
         api.get('/activity?limit=100'),
         api.get('/orders/rejection-stats'),
@@ -258,13 +258,13 @@ const AdminPortal = () => {
       const payload = {
         empId: manualEmployee.empId,
         name: manualEmployee.name,
-        designation: manualEmployee.designation,
+        designation: manualEmployee.role,
         role: manualEmployee.role || undefined
       };
 
       const response = await api.post('/employees', payload);
       setMessage(response.data.message || 'Employee added successfully');
-      setManualEmployee({ empId: '', name: '', designation: '', role: '' });
+      setManualEmployee({ empId: '', name: '', role: '' });
       await refreshAdminData();
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to add employee manually');
@@ -904,7 +904,7 @@ const AdminPortal = () => {
               <h3 className="text-xl font-bold mb-3">Employees</h3>
               <form onSubmit={handleManualEmployeeAdd} className={`mb-4 ${subtlePanelClass}`}>
                 <h4 className="font-semibold mb-3">Manual Add Employee</h4>
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-2 text-sm">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-sm">
                   <input
                     value={manualEmployee.empId}
                     onChange={(e) => setManualEmployee((p) => ({ ...p, empId: e.target.value }))}
@@ -919,24 +919,18 @@ const AdminPortal = () => {
                     className={inputClass}
                     required
                   />
-                  <input
-                    value={manualEmployee.designation}
-                    onChange={(e) => setManualEmployee((p) => ({ ...p, designation: e.target.value }))}
-                    placeholder="Designation"
-                    className={inputClass}
-                    required
-                  />
                   <select
                     value={manualEmployee.role}
                     onChange={(e) => setManualEmployee((p) => ({ ...p, role: e.target.value }))}
                     className={inputClass}
+                    required
                   >
-                    <option value="">Auto map by designation</option>
+                    <option value="">Select Role</option>
                     {['ADMIN', 'MANAGER', 'FABRIC_MAN', 'CUTTER', 'TAILOR', 'SUPERVISOR'].map((role) => (
                       <option key={role} value={role}>{role}</option>
                     ))}
                   </select>
-                  <button type="submit" disabled={loading} className={`${primaryButtonClass} rounded-xl`}>
+                  <button type="submit" disabled={loading} className={`${primaryButtonClass} rounded-xl md:justify-self-end md:ml-4`}>
                     Add Employee
                   </button>
                 </div>

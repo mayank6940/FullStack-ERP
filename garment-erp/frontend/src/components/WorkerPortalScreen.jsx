@@ -122,6 +122,21 @@ const WorkerPortalScreen = ({
     return subtitle;
   };
 
+  const getHandoffText = (order) => {
+    const handoffFrom = order?.handoffFrom;
+    if (!handoffFrom?.name) return '';
+
+    const empIdPart = handoffFrom.empId ? ` (${handoffFrom.empId})` : '';
+    return `Passed by: ${handoffFrom.name}${empIdPart}`;
+  };
+
+  const getCardSubtitle = (order) => {
+    const base = getDedupedSubtitle(order);
+    const handoff = getHandoffText(order);
+    if (base && handoff) return `${base} | ${handoff}`;
+    return base || handoff;
+  };
+
   const detailView = selectedOrder && (
     <div className="space-y-3">
       <div className={panelClass}>
@@ -142,6 +157,7 @@ const WorkerPortalScreen = ({
 
         <div className="mt-4 text-sm text-[#2b3a48] space-y-1">
           <p>{t('worker.colour')}: {selectedOrder.details?.companyFields?.Colour || '-'}</p>
+          {getHandoffText(selectedOrder) && <p>{getHandoffText(selectedOrder)}</p>}
         </div>
 
         <div className="mt-4 border-t pt-4">
@@ -238,7 +254,7 @@ const WorkerPortalScreen = ({
                   <OrderCard
                     key={order.id}
                     order={{ ...order, status: getDisplayStatus(order) }}
-                    subtitle={getDedupedSubtitle(order)}
+                    subtitle={getCardSubtitle(order)}
                     onTap={() => {
                       setSelectedOrder(order);
                       setShowIssueForm(false);

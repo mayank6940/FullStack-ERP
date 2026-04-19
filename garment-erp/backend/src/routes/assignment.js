@@ -53,4 +53,18 @@ router.get('/available/:role', authMiddleware, roleGuard('ADMIN', 'MANAGER'), as
   }
 });
 
+router.get('/suggestions/:orderId', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) => {
+  try {
+    const limitPerRole = Number.parseInt(req.query.limitPerRole, 10) || 5;
+    const suggestions = await assignmentService.getOrderAssignmentSuggestions(req.params.orderId, {
+      limitPerRole: Math.min(Math.max(limitPerRole, 1), 20)
+    });
+
+    res.json({ success: true, data: { suggestions }, message: 'Assignment suggestions fetched' });
+  } catch (error) {
+    console.error('assignment/suggestions error:', error);
+    res.status(400).json({ success: false, data: {}, message: error.message || 'Failed to fetch assignment suggestions' });
+  }
+});
+
 export default router;

@@ -133,6 +133,27 @@ const ManagerPortal = () => {
     return { overdue, stuck };
   }, [orders, portalSettings.overdueGraceHours, portalSettings.stuckOrderHours]);
 
+  const getEffectiveAssignments = (order) => {
+    const directAssignments = Array.isArray(order?.assignments) ? order.assignments : [];
+    if (directAssignments.length > 0) return directAssignments;
+
+    const subOrders = Array.isArray(order?.subOrders) ? order.subOrders : [];
+    const mergedAssignments = [];
+    const seen = new Set();
+
+    subOrders.forEach((subOrder) => {
+      const subAssignments = Array.isArray(subOrder?.assignments) ? subOrder.assignments : [];
+      subAssignments.forEach((assignment) => {
+        const key = `${assignment?.role || ''}:${assignment?.employee?.id || assignment?.employeeId || assignment?.id || ''}`;
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        mergedAssignments.push(assignment);
+      });
+    });
+
+    return mergedAssignments;
+  };
+
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
       if (filters.status && order.status !== filters.status) return false;
@@ -140,7 +161,7 @@ const ManagerPortal = () => {
       if (filters.fromDate && new Date(order.createdAt) < new Date(filters.fromDate)) return false;
       if (filters.toDate && new Date(order.createdAt) > new Date(filters.toDate + 'T23:59:59')) return false;
       if (filters.assignedWorker) {
-        const hasWorker = (order.assignments || []).some((a) => a.employee?.id === filters.assignedWorker);
+        const hasWorker = getEffectiveAssignments(order).some((a) => a.employee?.id === filters.assignedWorker);
         if (!hasWorker) return false;
       }
       return true;
@@ -717,7 +738,7 @@ const ManagerPortal = () => {
                   <td className="p-2">{order.details?.articleName || '-'}</td>
                   <td className="p-2">{order.size}</td>
                   <td className="p-2">{order.status}</td>
-                  <td className="p-2">{(order.assignments || []).map((a) => a.employee?.name).filter(Boolean).join(', ') || '-'}</td>
+                  <td className="p-2">{getEffectiveAssignments(order).map((a) => a.employee?.name).filter(Boolean).join(', ') || '-'}</td>
                   <td className="p-2">{new Date(order.createdAt).toLocaleString()}</td>
                   <td className="p-2"><button type="button" onClick={() => openOrderDetail(order)} className="text-blue-600">Detail</button></td>
                 </tr>
@@ -763,9 +784,10 @@ const ManagerPortal = () => {
 
             <h4 className="font-semibold mb-2">Assignments</h4>
             <ul className="text-sm mb-4 list-disc pl-5">
-              {(selectedOrder.assignments || []).map((a) => (
-                <li key={a.id}>{a.role}: {a.employee?.name} ({a.employee?.empId})</li>
+              {getEffectiveAssignments(selectedOrder).map((a) => (
+                <li key={`${a.id || 'assn'}-${a.role || 'role'}-${a.employee?.id || a.employeeId || 'emp'}`}>{a.role}: {a.employee?.name} ({a.employee?.empId})</li>
               ))}
+              {getEffectiveAssignments(selectedOrder).length === 0 && <li>-</li>}
             </ul>
 
             <h4 className="font-semibold mb-2">Timeline</h4>

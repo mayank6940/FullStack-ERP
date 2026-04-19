@@ -37,6 +37,12 @@ const ROLE_HISTORY_DONE_OR_LATER = {
   SUPERVISOR: ['COMPLETED']
 };
 
+const PREVIOUS_ROLE_BY_ROLE = {
+  CUTTER: 'FABRIC_MAN',
+  TAILOR: 'CUTTER',
+  SUPERVISOR: 'TAILOR'
+};
+
 const getUnresolvedIssueMapByOrder = (logs = []) => {
   const unresolvedByOrder = new Map();
 
@@ -61,11 +67,12 @@ const getUnresolvedIssueMapByOrder = (logs = []) => {
   return unresolvedByOrder;
 };
 
-const normalizeOrder = (assignment) => {
+const normalizeOrder = (assignment, handoffByOrderId = new Map()) => {
   const order = assignment.order;
   const details = order?.details && typeof order.details === 'object' ? order.details : {};
   const companyFields = details.companyFields && typeof details.companyFields === 'object' ? details.companyFields : {};
   const latestRejection = (order?.rejections || [])[0] || null;
+  const handoffFrom = handoffByOrderId.get(assignment.orderId) || null;
 
   return {
     id: order.id,
@@ -80,8 +87,43 @@ const normalizeOrder = (assignment) => {
     details,
     companyFields,
     latestRejection,
-    isReturned: Boolean(order.status === 'REJECTED' || latestRejection)
+    isReturned: Boolean(order.status === 'REJECTED' || latestRejection),
+    handoffFrom
   };
+};
+
+const buildHandoffMap = async (role, orderIds = []) => {
+  const previousRole = PREVIOUS_ROLE_BY_ROLE[role];
+  if (!previousRole || orderIds.length === 0) return new Map();
+
+  const previousAssignments = await prisma.orderAssignment.findMany({
+    where: {
+      orderId: { in: orderIds },
+      role: previousRole,
+      completedAt: { not: null }
+    },
+    orderBy: [{ completedAt: 'desc' }, { assignedAt: 'desc' }],
+    include: {
+      employee: {
+        select: { id: true, empId: true, name: true, role: true }
+      }
+    }
+  });
+
+  const handoffByOrderId = new Map();
+  previousAssignments.forEach((assignment) => {
+    if (!handoffByOrderId.has(assignment.orderId)) {
+      handoffByOrderId.set(assignment.orderId, {
+        employeeId: assignment.employee?.id || assignment.employeeId,
+        empId: assignment.employee?.empId || null,
+        name: assignment.employee?.name || null,
+        role: assignment.employee?.role || previousRole,
+        completedAt: assignment.completedAt || null
+      });
+    }
+  });
+
+  return handoffByOrderId;
 };
 
 router.get('/my-orders', authMiddleware, roleGuard(...WORKER_ROLES), async (req, res) => {
@@ -142,6 +184,8 @@ router.get('/my-orders', authMiddleware, roleGuard(...WORKER_ROLES), async (req,
       });
     }
 
+    const handoffByOrderId = await buildHandoffMap(role, visibleAssignments.map((assignment) => assignment.orderId));
+
     const total = visibleAssignments.length;
     const start = (pageNum - 1) * limitNum;
     const items = visibleAssignments.slice(start, start + limitNum);
@@ -150,7 +194,7 @@ router.get('/my-orders', authMiddleware, roleGuard(...WORKER_ROLES), async (req,
       success: true,
       data: {
         role,
-        items: items.map(normalizeOrder),
+        items: items.map((assignment) => normalizeOrder(assignment, handoffByOrderId)),
         total,
         page: pageNum,
         limit: limitNum,
@@ -194,9 +238,11 @@ router.get('/my-orders/history', authMiddleware, roleGuard(...WORKER_ROLES), asy
       }
     });
 
+    const handoffByOrderId = await buildHandoffMap(role, completedAssignments.map((assignment) => assignment.orderId));
+
     const normalizedItems = completedAssignments
       .map((assignment) => {
-        const base = normalizeOrder(assignment);
+        const base = normalizeOrder(assignment, handoffByOrderId);
         const returnedCount = (assignment.order.rejections || []).filter((rej) => rej.routedTo === role).length;
         const effectiveCompletedAt = assignment.completedAt || assignment.order.updatedAt || assignment.order.createdAt;
         return {

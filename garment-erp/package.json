@@ -1,0 +1,17 @@
+{
+  "name": "garment-erp",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Monorepo helper scripts for Garment ERP",
+  "scripts": {
+    "install:backend": "npm --prefix ./backend ci",
+    "install:frontend": "npm --prefix ./frontend ci",
+    "install:all": "npm run install:backend && npm run install:frontend",
+    "build:backend": "npm --prefix ./backend run prisma:generate",
+    "build:frontend": "npm --prefix ./frontend run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "start:backend": "npm --prefix ./backend run start",
+    "dev:backend": "npm --prefix ./backend run dev",
+    "dev:frontend": "npm --prefix ./frontend run dev"
+  }
+}

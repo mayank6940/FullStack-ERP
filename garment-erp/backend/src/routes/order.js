@@ -394,19 +394,7 @@ const parseDateRange = (fromDate, toDate) => {
   return { start, end };
 };
 
-const requiredWorkersPerRoleFromRows = (rows = []) => {
-  let required = 1;
-
-  for (const row of rows) {
-    const normalized = normalizeSize(row?.size);
-    if (normalized === 'MEDIUM' || normalized === 'LARGE') {
-      required = 2;
-      break;
-    }
-  }
-
-  return required;
-};
+const requiredWorkersPerRoleFromRows = () => 1;
 
 const getWeekStart = () => {
   const now = new Date();
@@ -671,7 +659,7 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
       return res.status(400).json({ success: false, data: {}, message: 'approvedRows is required' });
     }
 
-    const requiredPerRole = requiredWorkersPerRoleFromRows(approvedRows);
+    const requiredPerRole = requiredWorkersPerRoleFromRows();
     for (const role of ['FABRIC_MAN', 'CUTTER', 'TAILOR']) {
       const available = await assignmentService.getAvailableWorkers(role);
       if (available.length < requiredPerRole) {
@@ -976,11 +964,26 @@ router.get('/', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) 
       if (toDate) where.createdAt.lte = new Date(toDate);
     }
     if (assignedEmployee) {
-      where.assignments = {
-        some: {
-          employeeId: assignedEmployee
+      where.OR = [
+        {
+          assignments: {
+            some: {
+              employeeId: assignedEmployee
+            }
+          }
+        },
+        {
+          subOrders: {
+            some: {
+              assignments: {
+                some: {
+                  employeeId: assignedEmployee
+                }
+              }
+            }
+          }
         }
-      };
+      ];
     }
 
     const total = await prisma.order.count({ where });
@@ -994,6 +997,17 @@ router.get('/', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) 
           include: {
             employee: {
               select: { id: true, empId: true, name: true, role: true }
+            }
+          }
+        },
+        subOrders: {
+          include: {
+            assignments: {
+              include: {
+                employee: {
+                  select: { id: true, empId: true, name: true, role: true }
+                }
+              }
             }
           }
         }
@@ -1440,7 +1454,17 @@ router.get('/:id([0-9a-fA-F-]{36})', authMiddleware, roleGuard('ADMIN', 'MANAGER
             }
           }
         },
-        subOrders: true,
+        subOrders: {
+          include: {
+            assignments: {
+              include: {
+                employee: {
+                  select: { id: true, empId: true, name: true, role: true }
+                }
+              }
+            }
+          }
+        },
         parentOrder: true
       }
     });
@@ -1458,7 +1482,9 @@ router.get('/:id([0-9a-fA-F-]{36})', authMiddleware, roleGuard('ADMIN', 'MANAGER
 
 router.post('/:id/assign', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) => {
   try {
-    const result = await assignmentService.assignOrder(req.params.id);
+    const result = await assignmentService.assignOrder(req.params.id, {
+      overrides: req.body?.overrides || {}
+    });
     await logActivity(prisma, req.user.id, 'ORDER_ASSIGNED_MANUALLY', req.params.id, result);
     res.json({ success: true, data: { result }, message: 'Order assignment triggered' });
   } catch (error) {

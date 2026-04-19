@@ -54,6 +54,11 @@ cd ../frontend
 npm install
 ```
 
+From repository root (full install):
+```bash
+npm run install:all
+```
+
 ### Environment
 - Copy root [.env.example](.env.example) values into your local backend/frontend env files as needed.
 - For Vercel, set `VITE_API_URL` to the Render backend URL after the backend is live.
@@ -64,6 +69,11 @@ npm install
 cd backend
 npx prisma generate
 npx prisma migrate dev
+```
+
+From repository root (full build):
+```bash
+npm run build
 ```
 
 ### Run
