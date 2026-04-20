@@ -394,7 +394,10 @@ const parseDateRange = (fromDate, toDate) => {
   return { start, end };
 };
 
-const requiredWorkersPerRoleFromRows = () => 1;
+const isWorkerAvailabilityError = (error) => {
+  const message = String(error?.message || '');
+  return /no active workers available for role/i.test(message);
+};
 
 const getWeekStart = () => {
   const now = new Date();
@@ -659,22 +662,6 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
       return res.status(400).json({ success: false, data: {}, message: 'approvedRows is required' });
     }
 
-    const requiredPerRole = requiredWorkersPerRoleFromRows();
-    for (const role of ['FABRIC_MAN', 'CUTTER', 'TAILOR']) {
-      const available = await assignmentService.getAvailableWorkers(role);
-      if (available.length < requiredPerRole) {
-        return res.status(400).json({
-          success: false,
-          data: {
-            role,
-            required: requiredPerRole,
-            available: available.length
-          },
-          message: `Insufficient active workers for ${role}. Required: ${requiredPerRole}, available: ${available.length}`
-        });
-      }
-    }
-
     const batch = await prisma.csvBatch.create({
       data: {
         filename,
@@ -686,6 +673,7 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
 
     const createdOrders = [];
     const assignmentResults = [];
+    const unassignedOrders = [];
 
     for (const row of approvedRows) {
       const baseDetails = {
@@ -708,6 +696,8 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
           }
         });
 
+        let hasAssignedSubOrder = false;
+
         for (const suffix of ['A', 'B']) {
           const subOrder = await prisma.order.create({
             data: {
@@ -725,14 +715,29 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
           });
 
           createdOrders.push(subOrder);
-          const result = await assignmentService.assignOrder(subOrder.id);
-          assignmentResults.push(result);
+          try {
+            const result = await assignmentService.assignOrder(subOrder.id);
+            assignmentResults.push(result);
+            hasAssignedSubOrder = true;
+          } catch (assignError) {
+            if (isWorkerAvailabilityError(assignError)) {
+              unassignedOrders.push({
+                orderId: subOrder.id,
+                orderCode: subOrder.orderCode,
+                reason: String(assignError.message || 'No active workers available')
+              });
+              continue;
+            }
+            throw assignError;
+          }
         }
 
-        await prisma.order.update({
-          where: { id: parent.id },
-          data: { status: 'ASSIGNED' }
-        });
+        if (hasAssignedSubOrder) {
+          await prisma.order.update({
+            where: { id: parent.id },
+            data: { status: 'ASSIGNED' }
+          });
+        }
       } else {
         const order = await prisma.order.create({
           data: {
@@ -745,8 +750,20 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
         });
 
         createdOrders.push(order);
-        const result = await assignmentService.assignOrder(order.id);
-        assignmentResults.push(result);
+        try {
+          const result = await assignmentService.assignOrder(order.id);
+          assignmentResults.push(result);
+        } catch (assignError) {
+          if (isWorkerAvailabilityError(assignError)) {
+            unassignedOrders.push({
+              orderId: order.id,
+              orderCode: order.orderCode,
+              reason: String(assignError.message || 'No active workers available')
+            });
+            continue;
+          }
+          throw assignError;
+        }
       }
     }
 
@@ -758,17 +775,28 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
     await logActivity(prisma, req.user.id, 'ORDER_CSV_IMPORTED', null, {
       batchId: batch.id,
       filename,
-      createdOrders: createdOrders.length
+      createdOrders: createdOrders.length,
+      unassignedOrders: unassignedOrders.length
     });
+
+    const importedWithWarnings = unassignedOrders.length > 0;
 
     res.json({
       success: true,
       data: {
         batch,
         createdOrders,
-        assignmentResults
+        assignmentResults,
+        unassignedOrders,
+        summary: {
+          createdOrders: createdOrders.length,
+          assignedOrders: assignmentResults.length,
+          unassignedOrders: unassignedOrders.length
+        }
       },
-      message: 'Orders imported and assigned successfully'
+      message: importedWithWarnings
+        ? 'Orders imported successfully. Some orders are pending assignment because active workers are unavailable.'
+        : 'Orders imported and assigned successfully'
     });
   } catch (error) {
     console.error('orders/csv-confirm error:', error);
