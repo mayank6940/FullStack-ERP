@@ -3,9 +3,28 @@ import csv from 'csv-parser';
 import { Readable } from 'stream';
 import { authMiddleware, roleGuard } from '../middleware/auth.js';
 import { hashCredential, logActivity } from '../utils/auth.js';
+import AssignmentService from '../services/AssignmentService.js';
 import prisma from '../prisma/client.js';
 
 const router = express.Router();
+const assignmentService = new AssignmentService(prisma);
+const WORKER_ROLES = new Set(['FABRIC_MAN', 'CUTTER', 'TAILOR']);
+
+const replayPendingAssignmentsSafely = async (actorId, source) => {
+  try {
+    const replay = await assignmentService.assignUnassignedOrders({ limit: 300 });
+    if (replay.assignedCount > 0) {
+      await logActivity(prisma, actorId, 'PENDING_ASSIGNMENTS_RETRIED', null, {
+        source,
+        assignedCount: replay.assignedCount,
+        skippedCount: replay.skippedCount
+      });
+    }
+  } catch (error) {
+    // Employee mutations must still succeed even if assignment replay fails.
+    console.error(`assignment replay failed after ${source}:`, error);
+  }
+};
 
 const normalizeHeader = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -240,6 +259,10 @@ router.post('/', authMiddleware, roleGuard('ADMIN'), async (req, res) => {
       empId: created.empId,
       role: created.role
     });
+
+    if (created.isActive && WORKER_ROLES.has(created.role)) {
+      await replayPendingAssignmentsSafely(req.user.id, 'EMPLOYEE_CREATED_MANUAL');
+    }
 
     res.status(201).json({
       success: true,
@@ -504,6 +527,11 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN'), async (req, res)
       flagged: results.flagged.length
     });
 
+    const hasWorkerMutation = [...results.created, ...results.updated].some((row) => WORKER_ROLES.has(row.role));
+    if (hasWorkerMutation) {
+      await replayPendingAssignmentsSafely(req.user.id, 'EMPLOYEE_CSV_CONFIRM');
+    }
+
     const summaryMessage = `CSV import completed. Created: ${results.created.length}, Updated: ${results.updated.length}, Already exists/Unchanged: ${results.unchanged.length}, Flagged: ${results.flagged.length}.`;
 
     res.json({
@@ -574,6 +602,92 @@ router.get('/', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) 
   }
 });
 
+// DELETE /api/employees/bulk/non-management
+// Remove all non-management employees. Employees with history are deactivated instead of hard-deleted.
+router.delete('/bulk/non-management', authMiddleware, roleGuard('ADMIN'), async (req, res) => {
+  try {
+    const targets = await prisma.employee.findMany({
+      where: {
+        role: { notIn: ['ADMIN', 'MANAGER'] }
+      },
+      select: {
+        id: true,
+        empId: true,
+        name: true,
+        role: true,
+        isActive: true
+      }
+    });
+
+    if (targets.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          deleted: 0,
+          deactivated: 0,
+          skipped: 0,
+          totalTargets: 0
+        },
+        message: 'No non-management employees found to remove'
+      });
+    }
+
+    let deleted = 0;
+    let deactivated = 0;
+    let skipped = 0;
+
+    for (const emp of targets) {
+      const hasAssignments = await prisma.orderAssignment.findFirst({
+        where: { employeeId: emp.id },
+        select: { id: true }
+      });
+
+      if (hasAssignments) {
+        if (emp.isActive) {
+          await prisma.employee.update({ where: { id: emp.id }, data: { isActive: false } });
+          deactivated += 1;
+        } else {
+          skipped += 1;
+        }
+        continue;
+      }
+
+      try {
+        await prisma.employee.delete({ where: { id: emp.id } });
+        deleted += 1;
+      } catch (error) {
+        await prisma.employee.update({ where: { id: emp.id }, data: { isActive: false } });
+        deactivated += 1;
+        console.error(`bulk employee delete fallback to deactivate for ${emp.empId}:`, error?.message || error);
+      }
+    }
+
+    await logActivity(prisma, req.user.id, 'EMPLOYEES_BULK_REMOVED_NON_MANAGEMENT', null, {
+      totalTargets: targets.length,
+      deleted,
+      deactivated,
+      skipped
+    });
+
+    res.json({
+      success: true,
+      data: {
+        deleted,
+        deactivated,
+        skipped,
+        totalTargets: targets.length
+      },
+      message: `Processed ${targets.length} employees: deleted ${deleted}, deactivated ${deactivated}, skipped ${skipped}`
+    });
+  } catch (error) {
+    console.error('Bulk delete non-management employees error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to remove non-management employees'
+    });
+  }
+});
+
 // PATCH /api/employees/:id/deactivate
 // Deactivate an employee
 router.patch('/:id/deactivate', authMiddleware, roleGuard('ADMIN'), async (req, res) => {
@@ -610,6 +724,10 @@ router.patch('/:id/reactivate', authMiddleware, roleGuard('ADMIN'), async (req, 
 
     await logActivity(prisma, req.user.id, 'EMPLOYEE_REACTIVATED', null, { empId: employee.empId });
 
+    if (WORKER_ROLES.has(employee.role)) {
+      await replayPendingAssignmentsSafely(req.user.id, 'EMPLOYEE_REACTIVATED');
+    }
+
     res.json({
       success: true,
       data: { empId: employee.empId, name: employee.name },
@@ -636,6 +754,13 @@ router.delete('/:id', authMiddleware, roleGuard('ADMIN'), async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Employee not found'
+      });
+    }
+
+    if (employee.role === 'ADMIN' || employee.role === 'MANAGER') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin and Manager accounts cannot be deleted'
       });
     }
 
@@ -758,6 +883,10 @@ router.patch('/:id/role', authMiddleware, roleGuard('ADMIN'), async (req, res) =
     });
 
     await logActivity(prisma, req.user.id, 'ROLE_ASSIGNED', null, { empId: employee.empId, role });
+
+    if (employee.isActive && WORKER_ROLES.has(employee.role)) {
+      await replayPendingAssignmentsSafely(req.user.id, 'EMPLOYEE_ROLE_CHANGED');
+    }
 
     res.json({
       success: true,

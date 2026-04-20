@@ -176,23 +176,28 @@ const AdminPortal = () => {
 
   const refreshAdminData = async () => {
     try {
-      const [employeeRes, orderRes, activityRes, rejectionRes, issueRes] = await Promise.all([
-        api.get(`/employees?limit=300&_=${Date.now()}`),
-        api.get('/orders?limit=300'),
-        api.get('/activity?limit=100'),
+      const now = Date.now();
+      const [employeeRes, orderRes, activityRes, rejectionRes, issueRes] = await Promise.allSettled([
+        api.get(`/employees?limit=300&_=${now}`),
+        api.get(`/orders?limit=300&_=${now}`),
+        api.get(`/activity?limit=100&_=${now}`),
         api.get('/orders/rejection-stats'),
-        api.get('/orders/reported-issues?status=open&limit=200')
+        api.get(`/orders/reported-issues?status=open&limit=200&_=${now}`)
       ]);
 
-      setEmployees(employeeRes.data.data || []);
-      setOrders(orderRes.data.data.items || []);
-      setActivities(activityRes.data.data.items || []);
-      setRejectionStats(rejectionRes.data?.data || {
+      setEmployees(employeeRes.status === 'fulfilled' ? (employeeRes.value.data.data || []) : []);
+      setOrders(orderRes.status === 'fulfilled' ? (orderRes.value.data.data.items || []) : []);
+      setActivities(activityRes.status === 'fulfilled' ? (activityRes.value.data.data.items || []) : []);
+      setRejectionStats(rejectionRes.status === 'fulfilled' ? (rejectionRes.value.data?.data || {
+        summary: { rejectedToday: 0, rejectionRateThisWeek: 0 },
+        employeeStats: [],
+        managerStats: []
+      }) : {
         summary: { rejectedToday: 0, rejectionRateThisWeek: 0 },
         employeeStats: [],
         managerStats: []
       });
-      setOpenIssues(issueRes.data?.data?.items || []);
+      setOpenIssues(issueRes.status === 'fulfilled' ? (issueRes.value.data?.data?.items || []) : []);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load admin data');
     }
@@ -224,6 +229,24 @@ const AdminPortal = () => {
       await refreshAdminData();
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to delete employee');
+    }
+  };
+
+  const handleDeleteAllNonManagementEmployees = async () => {
+    const ok = window.confirm('Delete all non-management employees? ADMIN and MANAGER will be kept. Employees with history may be deactivated instead of deleted.');
+    if (!ok) return;
+
+    try {
+      setLoading(true);
+      setError('');
+      setMessage('');
+      const response = await api.delete('/employees/bulk/non-management');
+      setMessage(response.data?.message || 'Non-management employee cleanup completed');
+      await refreshAdminData();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to delete non-management employees');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -939,6 +962,7 @@ const AdminPortal = () => {
               <div className="flex gap-2 mb-3 text-sm">
                 <button type="button" onClick={() => setEmployeeTab('active')} className={`px-3 py-2 rounded-xl font-semibold ${employeeTab === 'active' ? 'bg-[#2d5a66] text-white' : 'bg-[#ece6da] text-[#2d3a48]'}`}>Active Employees</button>
                 <button type="button" onClick={() => setEmployeeTab('left')} className={`px-3 py-2 rounded-xl font-semibold ${employeeTab === 'left' ? 'bg-[#2d5a66] text-white' : 'bg-[#ece6da] text-[#2d3a48]'}`}>Left Company / Inactive</button>
+                <button type="button" onClick={handleDeleteAllNonManagementEmployees} disabled={loading} className={dangerButtonClass}>Delete All Non-Management</button>
               </div>
               <div className="mb-3">
                 <input
@@ -977,7 +1001,9 @@ const AdminPortal = () => {
                             ) : (
                               <button type="button" onClick={() => handleReactivate(emp.id)} className="px-2 py-1 text-xs bg-[#4f7a51] text-white rounded-lg">Reactivate</button>
                             )}
-                            <button type="button" onClick={() => handleDelete(emp.id)} className="px-2 py-1 text-xs bg-[#b94f3f] text-white rounded-lg">Delete</button>
+                            {!(emp.role === 'ADMIN' || emp.role === 'MANAGER') && (
+                              <button type="button" onClick={() => handleDelete(emp.id)} className="px-2 py-1 text-xs bg-[#b94f3f] text-white rounded-lg">Delete</button>
+                            )}
                             <select
                               value={emp.role}
                               onChange={(e) => handleChangeRole(emp.id, e.target.value)}

@@ -1042,6 +1042,9 @@ router.get('/', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) 
       }
     });
 
+    // Always serve fresh order list data after imports/deletes/assignment retries.
+    res.set('Cache-Control', 'no-store');
+
     res.json({
       success: true,
       data: {

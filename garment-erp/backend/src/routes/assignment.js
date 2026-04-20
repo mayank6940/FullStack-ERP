@@ -66,4 +66,24 @@ router.get('/suggestions/:orderId', authMiddleware, roleGuard('ADMIN', 'MANAGER'
   }
 });
 
+router.post('/retry-pending', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) => {
+  try {
+    const requestedLimit = Number.parseInt(req.body?.limit, 10);
+    const replay = await assignmentService.assignUnassignedOrders({
+      limit: Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 1000) : 300
+    });
+
+    res.json({
+      success: true,
+      data: replay,
+      message: replay.assignedCount > 0
+        ? `Assigned ${replay.assignedCount} pending orders`
+        : 'No pending orders could be assigned with current worker availability'
+    });
+  } catch (error) {
+    console.error('assignment/retry-pending error:', error);
+    res.status(500).json({ success: false, data: {}, message: 'Failed to retry pending order assignments' });
+  }
+});
+
 export default router;

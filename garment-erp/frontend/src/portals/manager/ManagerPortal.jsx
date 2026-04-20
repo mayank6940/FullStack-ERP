@@ -253,29 +253,38 @@ const ManagerPortal = () => {
     try {
       setPageLoading(true);
       setError('');
+      const now = Date.now();
 
       const [ordersRes, employeesRes, workloadRes, activityRes, rejectionStatsRes, settingsRes, issueRes] = await Promise.allSettled([
-        api.get('/orders?limit=200'),
-        api.get('/employees?limit=200'),
-        api.get('/assignment/workload'),
-        api.get('/activity?limit=50'),
+        api.get(`/orders?limit=200&_=${now}`),
+        api.get(`/employees?limit=200&_=${now}`),
+        api.get(`/assignment/workload?_=${now}`),
+        api.get(`/activity?limit=50&_=${now}`),
         api.get('/orders/rejection-stats'),
         api.get('/admin/settings/public'),
-        api.get('/orders/reported-issues?status=open&limit=200')
+        api.get(`/orders/reported-issues?status=open&limit=200&_=${now}`)
       ]);
 
       // Process results with fallbacks for failed requests
       if (ordersRes.status === 'fulfilled') {
         setOrders(ordersRes.value.data.data.items || []);
+      } else {
+        setOrders([]);
       }
       if (employeesRes.status === 'fulfilled') {
         setEmployees(employeesRes.value.data.data || []);
+      } else {
+        setEmployees([]);
       }
       if (workloadRes.status === 'fulfilled') {
         setWorkloads(workloadRes.value.data.data.workloads || []);
+      } else {
+        setWorkloads([]);
       }
       if (activityRes.status === 'fulfilled') {
         setActivities(activityRes.value.data.data.items || []);
+      } else {
+        setActivities([]);
       }
       if (rejectionStatsRes.status === 'fulfilled') {
         setRejectionStats(rejectionStatsRes.value.data?.data || {
@@ -288,6 +297,8 @@ const ManagerPortal = () => {
       }
       if (issueRes.status === 'fulfilled') {
         setOpenIssues(issueRes.value.data?.data?.items || []);
+      } else {
+        setOpenIssues([]);
       }
 
       // Show error only if all critical API calls failed
@@ -530,10 +541,15 @@ const ManagerPortal = () => {
       setCsvLoading(true);
       setError('');
 
-      await api.post('/orders/csv-confirm', {
+      const response = await api.post('/orders/csv-confirm', {
         filename: 'orders.csv',
         approvedRows: previewResult.report.validRows
       }, { timeout: 300000 });
+
+      const unassignedCount = response.data?.data?.summary?.unassignedOrders || 0;
+      if (unassignedCount > 0) {
+        setError(`Imported with warning: ${unassignedCount} orders are pending assignment. Add/reactivate workers and click "Retry Pending Assignment".`);
+      }
 
       await fetchData();
       setPreviewResult(null);
@@ -562,6 +578,24 @@ const ManagerPortal = () => {
       await fetchData();
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to delete all orders');
+    } finally {
+      setCsvLoading(false);
+    }
+  };
+
+  const handleRetryPendingAssignments = async () => {
+    try {
+      setCsvLoading(true);
+      setError('');
+      const response = await api.post('/assignment/retry-pending', { limit: 500 });
+      const assigned = response.data?.data?.assignedCount || 0;
+      const skipped = response.data?.data?.skippedCount || 0;
+      await fetchData();
+      if (assigned === 0 && skipped > 0) {
+        setError(`No pending orders could be assigned yet. Still waiting for active workers in required roles. Skipped: ${skipped}`);
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to retry pending assignments');
     } finally {
       setCsvLoading(false);
     }
@@ -692,14 +726,24 @@ const ManagerPortal = () => {
         <div className={panelClass}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xl font-bold text-[#132130]">Orders</h3>
-          <button
-            type="button"
-            onClick={handleDeleteAllOrders}
-            disabled={csvLoading || pageLoading || orders.length === 0}
-            className={dangerButtonClass}
-          >
-            Delete All Orders
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleRetryPendingAssignments}
+              disabled={csvLoading || pageLoading}
+              className={secondaryButtonClass}
+            >
+              Retry Pending Assignment
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteAllOrders}
+              disabled={csvLoading || pageLoading || orders.length === 0}
+              className={dangerButtonClass}
+            >
+              Delete All Orders
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-3 text-sm">
           <select value={filters.status} onChange={(e) => setFilters((p) => ({ ...p, status: e.target.value }))} className={inputClass}>

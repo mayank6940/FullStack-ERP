@@ -18,6 +18,8 @@ const ASSIGNMENT_TRANSACTION_OPTIONS = {
   isolationLevel: Prisma.TransactionIsolationLevel.Serializable
 };
 
+const isNoActiveWorkersAvailableError = (error) => /no active workers available for role/i.test(String(error?.message || ''));
+
 class AssignmentService {
   constructor(prisma = sharedPrisma) {
     this.prisma = prisma;
@@ -297,6 +299,71 @@ class AssignmentService {
       orderId,
       orderStatus: order.status,
       suggestions
+    };
+  }
+
+  async assignUnassignedOrders(options = {}) {
+    const limit = Number.isFinite(options.limit) ? options.limit : 200;
+
+    const pendingOrders = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.RECEIVED,
+        assignments: { none: {} },
+        OR: [
+          { parentOrderId: { not: null } },
+          { subOrders: { none: {} } }
+        ]
+      },
+      select: {
+        id: true,
+        orderCode: true,
+        parentOrderId: true
+      },
+      orderBy: { createdAt: 'asc' },
+      take: Math.min(Math.max(limit, 1), 1000)
+    });
+
+    const assignedOrders = [];
+    const skippedOrders = [];
+
+    for (const order of pendingOrders) {
+      try {
+        const result = await this.assignOrder(order.id);
+        assignedOrders.push({
+          orderId: order.id,
+          orderCode: order.orderCode,
+          assignmentsCount: result.assignmentsCount
+        });
+
+        if (order.parentOrderId) {
+          await this.prisma.order.updateMany({
+            where: {
+              id: order.parentOrderId,
+              status: OrderStatus.RECEIVED
+            },
+            data: { status: OrderStatus.ASSIGNED }
+          });
+        }
+      } catch (error) {
+        if (isNoActiveWorkersAvailableError(error)) {
+          skippedOrders.push({
+            orderId: order.id,
+            orderCode: order.orderCode,
+            reason: String(error.message || 'No active workers available')
+          });
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    return {
+      scannedOrders: pendingOrders.length,
+      assignedOrders,
+      skippedOrders,
+      assignedCount: assignedOrders.length,
+      skippedCount: skippedOrders.length
     };
   }
 
