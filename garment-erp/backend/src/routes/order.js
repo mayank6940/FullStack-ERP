@@ -718,7 +718,17 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
           try {
             const result = await assignmentService.assignOrder(subOrder.id);
             assignmentResults.push(result);
-            hasAssignedSubOrder = true;
+            if (result.assignmentsCount > 0) {
+              hasAssignedSubOrder = true;
+            }
+
+            if ((result.missingRoles || []).length > 0) {
+              unassignedOrders.push({
+                orderId: subOrder.id,
+                orderCode: subOrder.orderCode,
+                reason: `No active workers available for roles: ${result.missingRoles.join(', ')}`
+              });
+            }
           } catch (assignError) {
             if (isWorkerAvailabilityError(assignError)) {
               unassignedOrders.push({
@@ -753,6 +763,13 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async
         try {
           const result = await assignmentService.assignOrder(order.id);
           assignmentResults.push(result);
+          if ((result.missingRoles || []).length > 0) {
+            unassignedOrders.push({
+              orderId: order.id,
+              orderCode: order.orderCode,
+              reason: `No active workers available for roles: ${result.missingRoles.join(', ')}`
+            });
+          }
         } catch (assignError) {
           if (isWorkerAvailabilityError(assignError)) {
             unassignedOrders.push({

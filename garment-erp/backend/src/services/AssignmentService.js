@@ -18,8 +18,6 @@ const ASSIGNMENT_TRANSACTION_OPTIONS = {
   isolationLevel: Prisma.TransactionIsolationLevel.Serializable
 };
 
-const isNoActiveWorkersAvailableError = (error) => /no active workers available for role/i.test(String(error?.message || ''));
-
 class AssignmentService {
   constructor(prisma = sharedPrisma) {
     this.prisma = prisma;
@@ -60,6 +58,7 @@ class AssignmentService {
         (order.assignments || []).map((assignment) => [assignment.role, assignment])
       );
       const assigned = [];
+      const missingRoles = [];
 
       for (const role of ASSIGNMENT_ROLES) {
         const existing = existingByRole.get(role);
@@ -74,9 +73,10 @@ class AssignmentService {
         if (overrideEmployeeId) {
           selectedWorker = await this._validateOverrideWorker(tx, role, overrideEmployeeId);
         } else {
-          const suggestions = await this.getSuggestedWorkersForRole(role, { tx, limit: 5 });
+          const suggestions = await this.getSuggestedWorkersForRole(role, { tx, limit: 5, includeAtCapacity: true });
           if (suggestions.length === 0) {
-            throw new Error(`No active workers available for role ${role}`);
+            missingRoles.push(role);
+            continue;
           }
           selectedWorker = suggestions[0];
         }
@@ -85,7 +85,7 @@ class AssignmentService {
         assigned.push(created);
       }
 
-      if (order.status === OrderStatus.RECEIVED) {
+      if (order.status === OrderStatus.RECEIVED && assigned.length > 0) {
         await tx.order.update({
           where: { id: orderId },
           data: { status: OrderStatus.ASSIGNED }
@@ -95,7 +95,8 @@ class AssignmentService {
       return {
         orderId,
         assignmentsCount: assigned.length,
-        assignments: assigned
+        assignments: assigned,
+        missingRoles
       };
     }, ASSIGNMENT_TRANSACTION_OPTIONS);
   }
@@ -307,17 +308,16 @@ class AssignmentService {
 
     const pendingOrders = await this.prisma.order.findMany({
       where: {
-        status: OrderStatus.RECEIVED,
-        assignments: { none: {} },
-        OR: [
-          { parentOrderId: { not: null } },
-          { subOrders: { none: {} } }
-        ]
+        status: { in: [OrderStatus.RECEIVED, OrderStatus.ASSIGNED] },
+        OR: [{ parentOrderId: { not: null } }, { subOrders: { none: {} } }]
       },
       select: {
         id: true,
         orderCode: true,
-        parentOrderId: true
+        parentOrderId: true,
+        assignments: {
+          select: { role: true }
+        }
       },
       orderBy: { createdAt: 'asc' },
       take: Math.min(Math.max(limit, 1), 1000)
@@ -327,13 +327,29 @@ class AssignmentService {
     const skippedOrders = [];
 
     for (const order of pendingOrders) {
+      const assignedRoles = new Set((order.assignments || []).map((assignment) => assignment.role));
+      if (ASSIGNMENT_ROLES.every((role) => assignedRoles.has(role))) {
+        continue;
+      }
+
       try {
         const result = await this.assignOrder(order.id);
-        assignedOrders.push({
-          orderId: order.id,
-          orderCode: order.orderCode,
-          assignmentsCount: result.assignmentsCount
-        });
+        if (result.assignmentsCount > 0) {
+          assignedOrders.push({
+            orderId: order.id,
+            orderCode: order.orderCode,
+            assignmentsCount: result.assignmentsCount,
+            missingRoles: result.missingRoles || []
+          });
+        } else {
+          skippedOrders.push({
+            orderId: order.id,
+            orderCode: order.orderCode,
+            reason: (result.missingRoles || []).length > 0
+              ? `No active workers available for roles: ${(result.missingRoles || []).join(', ')}`
+              : 'No assignments created'
+          });
+        }
 
         if (order.parentOrderId) {
           await this.prisma.order.updateMany({
@@ -345,15 +361,6 @@ class AssignmentService {
           });
         }
       } catch (error) {
-        if (isNoActiveWorkersAvailableError(error)) {
-          skippedOrders.push({
-            orderId: order.id,
-            orderCode: order.orderCode,
-            reason: String(error.message || 'No active workers available')
-          });
-          continue;
-        }
-
         throw error;
       }
     }

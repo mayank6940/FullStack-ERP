@@ -73,9 +73,21 @@ router.post('/retry-pending', authMiddleware, roleGuard('ADMIN', 'MANAGER'), asy
       limit: Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 1000) : 300
     });
 
+    const roles = ['FABRIC_MAN', 'CUTTER', 'TAILOR'];
+    const availabilityEntries = await Promise.all(
+      roles.map(async (role) => {
+        const workers = await assignmentService.getAvailableWorkers(role, { limit: 500 });
+        return [role, workers.length];
+      })
+    );
+    const activeWorkersByRole = Object.fromEntries(availabilityEntries);
+
     res.json({
       success: true,
-      data: replay,
+      data: {
+        ...replay,
+        activeWorkersByRole
+      },
       message: replay.assignedCount > 0
         ? `Assigned ${replay.assignedCount} pending orders`
         : 'No pending orders could be assigned with current worker availability'
