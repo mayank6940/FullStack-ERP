@@ -1,9 +1,8 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleGuard } from '../middleware/auth.js';
+import prisma from '../prisma/client.js';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const clampLimit = (value, fallback = 20) => {
   const parsed = Number.parseInt(value, 10);

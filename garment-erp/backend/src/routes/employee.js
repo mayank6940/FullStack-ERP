@@ -1,12 +1,11 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import csv from 'csv-parser';
 import { Readable } from 'stream';
 import { authMiddleware, roleGuard } from '../middleware/auth.js';
 import { hashCredential, logActivity } from '../utils/auth.js';
+import prisma from '../prisma/client.js';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const normalizeHeader = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 

@@ -1,11 +1,10 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
 import { generateTokens, hashCredential, verifyCredential, logActivity } from '../utils/auth.js';
 import { authMiddleware } from '../middleware/auth.js';
+import prisma from '../prisma/client.js';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const getCookieOptions = (maxAge) => ({
   httpOnly: true,

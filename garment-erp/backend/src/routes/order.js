@@ -1,13 +1,13 @@
 import express from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import csv from 'csv-parser';
 import { Readable } from 'stream';
 import { authMiddleware, roleGuard } from '../middleware/auth.js';
 import AssignmentService from '../services/AssignmentService.js';
 import { logActivity } from '../utils/auth.js';
+import prisma from '../prisma/client.js';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 const assignmentService = new AssignmentService(prisma);
 const EMPLOYEE_ROLES = ['FABRIC_MAN', 'CUTTER', 'TAILOR', 'SUPERVISOR'];
 const VISIBILITY_SIGNATURE_PREFIX = '__EMPLOYEE_VISIBLE_COLUMNS__';

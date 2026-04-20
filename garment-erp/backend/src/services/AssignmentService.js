@@ -1,4 +1,5 @@
-import { Prisma, PrismaClient, OrderStatus } from '@prisma/client';
+import { Prisma, OrderStatus } from '@prisma/client';
+import sharedPrisma from '../prisma/client.js';
 
 const ASSIGNMENT_ROLES = ['FABRIC_MAN', 'CUTTER', 'TAILOR'];
 const DEFAULT_MAX_ACTIVE_PER_EMPLOYEE = Number.parseInt(process.env.ASSIGNMENT_MAX_ACTIVE_PER_EMPLOYEE || '4', 10) || 4;
@@ -18,7 +19,7 @@ const ASSIGNMENT_TRANSACTION_OPTIONS = {
 };
 
 class AssignmentService {
-  constructor(prisma = new PrismaClient()) {
+  constructor(prisma = sharedPrisma) {
     this.prisma = prisma;
   }
 

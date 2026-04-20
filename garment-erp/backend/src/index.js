@@ -1,7 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
-import { PrismaClient } from '@prisma/client';
+import prisma from './prisma/client.js';
 
 // Route imports
 import authRoutes from './routes/auth.js';
@@ -17,7 +17,6 @@ import adminRoutes from './routes/admin.js';
 dotenv.config();
 
 const app = express();
-const prisma = new PrismaClient();
 
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || '')
   .split(',')
@@ -107,14 +106,49 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
 });
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('Shutting down gracefully...');
-  await prisma.$disconnect();
-  process.exit(0);
+let isShuttingDown = false;
+
+const shutdown = async (signal) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`Received ${signal}. Shutting down gracefully...`);
+
+  const forceExitTimer = setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+  forceExitTimer.unref();
+
+  server.close(async () => {
+    try {
+      await prisma.$disconnect();
+      process.exit(0);
+    } catch (error) {
+      console.error('Failed to disconnect Prisma cleanly:', error);
+      process.exit(1);
+    }
+  });
+};
+
+process.on('SIGINT', () => {
+  shutdown('SIGINT');
+});
+
+process.on('SIGTERM', () => {
+  shutdown('SIGTERM');
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  shutdown('uncaughtException');
 });

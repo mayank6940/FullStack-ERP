@@ -1,10 +1,9 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleGuard } from '../middleware/auth.js';
 import AssignmentService from '../services/AssignmentService.js';
+import prisma from '../prisma/client.js';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 const assignmentService = new AssignmentService(prisma);
 
 router.get('/workload', authMiddleware, roleGuard('ADMIN', 'MANAGER'), async (req, res) => {

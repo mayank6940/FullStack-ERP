@@ -1,9 +1,8 @@
 import express from 'express';
-import { PrismaClient } from '@prisma/client';
 import { authMiddleware, roleGuard } from '../middleware/auth.js';
+import prisma from '../prisma/client.js';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 const WORKER_ROLES = ['FABRIC_MAN', 'CUTTER', 'TAILOR', 'SUPERVISOR'];
 const ISSUE_REPORTED_ACTION = 'ORDER_ISSUE_REPORTED';
