@@ -77,7 +77,7 @@ const AdminPortal = () => {
     }, {});
 
     return {
-      totalEmployees: employees.length,
+      totalEmployees: employees.filter((emp) => emp.isActive).length,
       totalOrders: orders.length,
       inProgress: orders.filter((o) => String(o.status).includes('IN_PROGRESS')).length,
       completed: orders.filter((o) => o.status === 'COMPLETED').length,

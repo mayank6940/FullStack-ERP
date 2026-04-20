@@ -136,11 +136,15 @@ router.post('/csv-preview', authMiddleware, roleGuard('ADMIN'), async (req, res)
 
           if (existingMap.has(normalizedEmpId)) {
             const existing = existingMap.get(normalizedEmpId);
-            if (existing.name !== record.name || existing.designation !== record.designation) {
+            const needsFieldUpdate = existing.name !== record.name || existing.designation !== record.designation;
+            const needsReactivation = !existing.isActive;
+
+            if (needsFieldUpdate || needsReactivation) {
               updatedEmployees.push({
                 ...record,
                 empId: normalizedEmpId,
                 mappedRole,
+                wasInactive: !existing.isActive,
                 action: 'UPDATE'
               });
             } else {
@@ -346,14 +350,30 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN'), async (req, res)
         const existing = await prisma.employee.findUnique({ where: { empId: normalizedEmpId } });
 
         if (existing) {
-          results.unchanged.push({
-            id: existing.id,
-            empId: existing.empId,
-            name: existing.name,
-            role: existing.role,
-            reason: 'EMP_ALREADY_EXISTS'
-          });
-          await safeLogActivity('EMPLOYEE_SKIPPED_EXISTS', { empId: existing.empId, source: 'CSV_CONFIRM_CREATE_LIST' });
+          if (!existing.isActive) {
+            const reactivated = await prisma.employee.update({
+              where: { empId: normalizedEmpId },
+              data: { isActive: true }
+            });
+
+            results.updated.push({
+              id: reactivated.id,
+              empId: reactivated.empId,
+              name: reactivated.name,
+              role: reactivated.role,
+              note: 'Employee existed but was inactive; reactivated'
+            });
+            await safeLogActivity('EMPLOYEE_REACTIVATED', { empId: reactivated.empId, source: 'CSV_CONFIRM_CREATE_LIST' });
+          } else {
+            results.unchanged.push({
+              id: existing.id,
+              empId: existing.empId,
+              name: existing.name,
+              role: existing.role,
+              reason: 'EMP_ALREADY_EXISTS'
+            });
+            await safeLogActivity('EMPLOYEE_SKIPPED_EXISTS', { empId: existing.empId, source: 'CSV_CONFIRM_CREATE_LIST' });
+          }
         } else {
           const record = await prisma.employee.create({
             data: {
@@ -429,8 +449,9 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN'), async (req, res)
           const existingDesignation = String(existing.designation || '').trim();
           const incomingName = String(emp.name || '').trim();
           const incomingDesignation = String(emp.designation || '').trim();
+          const shouldReactivate = !existing.isActive;
 
-          if (existingName === incomingName && existingDesignation === incomingDesignation && existing.role === resolvedRole) {
+          if (!shouldReactivate && existingName === incomingName && existingDesignation === incomingDesignation && existing.role === resolvedRole) {
             results.unchanged.push({
               id: existing.id,
               empId: existing.empId,
@@ -446,7 +467,8 @@ router.post('/csv-confirm', authMiddleware, roleGuard('ADMIN'), async (req, res)
             data: {
               name: incomingName,
               designation: incomingDesignation,
-              role: resolvedRole
+              role: resolvedRole,
+              isActive: true
             }
           });
 
