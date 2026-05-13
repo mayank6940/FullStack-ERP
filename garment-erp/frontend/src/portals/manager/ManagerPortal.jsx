@@ -26,6 +26,10 @@ const ManagerPortal = () => {
   const [invalidRows, setInvalidRows] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [selectedTimeline, setSelectedTimeline] = useState([]);
+  const [substitutePools, setSubstitutePools] = useState({});
+  const [substituteDrafts, setSubstituteDrafts] = useState({});
+  const [substituteLoadingRole, setSubstituteLoadingRole] = useState('');
+  const [substituteError, setSubstituteError] = useState('');
   const [visibilityRole, setVisibilityRole] = useState('FABRIC_MAN');
   const [visibilityRoles, setVisibilityRoles] = useState(['FABRIC_MAN', 'CUTTER', 'TAILOR', 'SUPERVISOR']);
   const [availableColumns, setAvailableColumns] = useState([]);
@@ -446,6 +450,78 @@ const ManagerPortal = () => {
     }
   };
 
+  const loadSubstituteCandidates = async (order) => {
+    const assignments = Array.isArray(order?.assignments) ? order.assignments : [];
+    const roles = [...new Set(assignments.map((assignment) => assignment.role).filter(Boolean))];
+
+    if (roles.length === 0) {
+      setSubstitutePools({});
+      setSubstituteDrafts({});
+      setSubstituteError('');
+      return;
+    }
+
+    setSubstituteError('');
+
+    const results = await Promise.allSettled(
+      roles.map(async (role) => {
+        const response = await api.get(`/assignment/substitutes/${role}?limit=15`);
+        const assignedEmployeeIds = new Set(assignments.map((assignment) => assignment.employeeId).filter(Boolean));
+        const candidates = (response.data?.data?.candidates || []).filter((candidate) => !assignedEmployeeIds.has(candidate.id));
+        return [role, candidates];
+      })
+    );
+
+    const nextPools = {};
+    const nextDrafts = {};
+
+    results.forEach((result, index) => {
+      const role = roles[index];
+      if (result.status !== 'fulfilled') return;
+      const [resolvedRole, candidates] = result.value;
+      nextPools[resolvedRole] = candidates;
+      if (candidates.length > 0) {
+        nextDrafts[resolvedRole] = candidates[0].id;
+      }
+    });
+
+    setSubstitutePools(nextPools);
+    setSubstituteDrafts(nextDrafts);
+
+    if (results.some((result) => result.status === 'rejected')) {
+      setSubstituteError('Some substitute candidates could not be loaded.');
+    }
+  };
+
+  const handleReassignAssignment = async (role) => {
+    if (!selectedOrder) return;
+
+    const employeeId = substituteDrafts[role];
+    if (!employeeId) {
+      setSubstituteError('Select a substitute worker first.');
+      return;
+    }
+
+    try {
+      setSubstituteLoadingRole(role);
+      setError('');
+      setSubstituteError('');
+
+      await api.post('/assignment/reassign', {
+        orderId: selectedOrder.id,
+        role,
+        employeeId
+      });
+
+      await openOrderDetail(selectedOrder);
+      await fetchData();
+    } catch (err) {
+      setSubstituteError(err.response?.data?.message || 'Failed to reassign worker');
+    } finally {
+      setSubstituteLoadingRole('');
+    }
+  };
+
   const handleOrderCsvUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -607,8 +683,10 @@ const ManagerPortal = () => {
         api.get(`/orders/${order.id}`),
         api.get(`/orders/${order.id}/timeline`)
       ]);
-      setSelectedOrder(detailRes.data.data.order);
+      const detailOrder = detailRes.data.data.order;
+      setSelectedOrder(detailOrder);
       setSelectedTimeline(timelineRes.data.data.timeline || []);
+      await loadSubstituteCandidates(detailOrder);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load order detail');
     }
@@ -821,18 +899,81 @@ const ManagerPortal = () => {
           <div className="bg-white rounded-2xl border border-[#d9d1c3] shadow-xl w-full max-w-3xl max-h-[80vh] overflow-y-auto p-6">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-xl font-bold">Order Detail: {selectedOrder.orderCode}</h3>
-              <button type="button" onClick={() => setSelectedOrder(null)} className="text-gray-600">Close</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedOrder(null);
+                  setSelectedTimeline([]);
+                  setSubstitutePools({});
+                  setSubstituteDrafts({});
+                  setSubstituteError('');
+                  setSubstituteLoadingRole('');
+                }}
+                className="text-gray-600"
+              >
+                Close
+              </button>
             </div>
             <p className="text-sm mb-2">Status: <span className="font-semibold">{selectedOrder.status}</span></p>
             <p className="text-sm mb-4">Size: <span className="font-semibold">{selectedOrder.size}</span></p>
 
             <h4 className="font-semibold mb-2">Assignments</h4>
-            <ul className="text-sm mb-4 list-disc pl-5">
-              {getEffectiveAssignments(selectedOrder).map((a) => (
-                <li key={`${a.id || 'assn'}-${a.role || 'role'}-${a.employee?.id || a.employeeId || 'emp'}`}>{a.role}: {a.employee?.name} ({a.employee?.empId})</li>
-              ))}
-              {getEffectiveAssignments(selectedOrder).length === 0 && <li>-</li>}
-            </ul>
+            {substituteError && <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{substituteError}</p>}
+            <div className="space-y-3 mb-4">
+              {getEffectiveAssignments(selectedOrder).map((assignment) => {
+                const candidates = substitutePools[assignment.role] || [];
+                const isSubstitute = assignment.employee?.role && assignment.employee.role !== assignment.role;
+                const hasAvailable = candidates.length > 0;
+
+                return (
+                  <div key={`${assignment.id || 'assn'}-${assignment.role || 'role'}-${assignment.employee?.id || assignment.employeeId || 'emp'}`} className="rounded-xl border border-[#e1d8c9] bg-[#fbf9f4] p-3">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <p className="font-semibold">
+                          {assignment.role}: {assignment.employee?.name} ({assignment.employee?.empId})
+                          {isSubstitute && (
+                            <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                              Substitute from {assignment.employee?.role}
+                            </span>
+                          )}
+                        </p>
+                        {hasAvailable ? (
+                          <p className="text-xs text-green-600 font-semibold">✓ {candidates.length} available {assignment.role} worker(s)</p>
+                        ) : (
+                          <p className="text-xs text-red-600 font-semibold">✗ No available {assignment.role} workers</p>
+                        )}
+                      </div>
+                      {hasAvailable && (
+                        <div className="flex flex-col gap-2 md:w-[320px]">
+                          <select
+                            className={inputClass}
+                            value={substituteDrafts[assignment.role] || ''}
+                            onChange={(e) => setSubstituteDrafts((prev) => ({ ...prev, [assignment.role]: e.target.value }))}
+                            disabled={substituteLoadingRole === assignment.role}
+                          >
+                            <option value="">Select {assignment.role} worker</option>
+                            {candidates.map((candidate) => (
+                              <option key={candidate.id} value={candidate.id}>
+                                {candidate.name} ({candidate.empId}) - active {candidate.activeAssignments}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => handleReassignAssignment(assignment.role)}
+                            disabled={substituteLoadingRole === assignment.role}
+                            className={secondaryButtonClass}
+                          >
+                            {substituteLoadingRole === assignment.role ? 'Reassigning...' : 'Replace assigned worker'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {getEffectiveAssignments(selectedOrder).length === 0 && <p className="text-sm text-gray-500">-</p>}
+            </div>
 
             <h4 className="font-semibold mb-2">Timeline</h4>
             <div className="space-y-2 text-sm">

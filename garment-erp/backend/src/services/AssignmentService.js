@@ -147,6 +147,199 @@ class AssignmentService {
     return preferred.length > 0 ? preferred : suggestions;
   }
 
+  async getSuggestedSubstituteWorkers(options = {}) {
+    const tx = options.tx || this.prisma;
+    const limit = Number.isFinite(options.limit) ? options.limit : 10;
+    const maxActive = Number.isFinite(options.maxActive) ? options.maxActive : DEFAULT_MAX_ACTIVE_PER_EMPLOYEE;
+    const includeAtCapacity = Boolean(options.includeAtCapacity);
+    const role = options.role ? String(options.role).toUpperCase() : null;
+
+    const workers = await tx.employee.findMany({
+      where: {
+        role: role && ASSIGNMENT_ROLES.includes(role) ? role : { in: ASSIGNMENT_ROLES },
+        isActive: true
+      },
+      select: {
+        id: true,
+        empId: true,
+        name: true,
+        role: true,
+        lastLogin: true
+      }
+    });
+
+    if (workers.length === 0) return [];
+
+    const workerIds = workers.map((worker) => worker.id);
+    const [activeByEmployee, totalByEmployee, completedByEmployee, lastByEmployee] = await Promise.all([
+      tx.orderAssignment.groupBy({
+        by: ['employeeId'],
+        where: {
+          employeeId: { in: workerIds },
+          completedAt: null,
+          order: {
+            status: { in: IN_PROGRESS_STATUSES }
+          }
+        },
+        _count: { _all: true }
+      }),
+      tx.orderAssignment.groupBy({
+        by: ['employeeId'],
+        where: {
+          employeeId: { in: workerIds }
+        },
+        _count: { _all: true }
+      }),
+      tx.orderAssignment.groupBy({
+        by: ['employeeId'],
+        where: {
+          employeeId: { in: workerIds },
+          completedAt: { not: null }
+        },
+        _count: { _all: true }
+      }),
+      tx.orderAssignment.groupBy({
+        by: ['employeeId'],
+        where: {
+          employeeId: { in: workerIds }
+        },
+        _max: { assignedAt: true }
+      })
+    ]);
+
+    const activeMap = new Map(activeByEmployee.map((row) => [row.employeeId, row._count._all]));
+    const totalMap = new Map(totalByEmployee.map((row) => [row.employeeId, row._count._all]));
+    const completedMap = new Map(completedByEmployee.map((row) => [row.employeeId, row._count._all]));
+    const lastAssignedMap = new Map(lastByEmployee.map((row) => [row.employeeId, row._max.assignedAt]));
+
+    const nowMs = Date.now();
+
+    const scored = workers.map((worker) => {
+      const activeAssignments = activeMap.get(worker.id) || 0;
+      const totalAssigned = totalMap.get(worker.id) || 0;
+      const totalCompleted = completedMap.get(worker.id) || 0;
+      const lastAssignedAt = lastAssignedMap.get(worker.id) || null;
+      const lastAssignedMs = lastAssignedAt ? new Date(lastAssignedAt).getTime() : 0;
+
+      const workloadScore = 1 / (1 + activeAssignments);
+      const rotationScore = 1 / (1 + totalAssigned);
+      const idleHours = lastAssignedAt ? (nowMs - lastAssignedMs) / (1000 * 60 * 60) : 24 * 365;
+      const idleScore = Math.min(idleHours / 48, 1);
+      const qualityScore = totalAssigned > 0 ? totalCompleted / totalAssigned : 0.5;
+      const fairnessScore = (workloadScore * 0.45) + (rotationScore * 0.35) + (idleScore * 0.20);
+      const score = Number((fairnessScore + (qualityScore * 0.05)).toFixed(6));
+
+      return {
+        ...worker,
+        activeAssignments,
+        totalAssigned,
+        totalCompleted,
+        lastAssignedAt,
+        score,
+        isAtCapacity: activeAssignments >= maxActive
+      };
+    });
+
+    scored.sort((a, b) => {
+      if (a.isAtCapacity !== b.isAtCapacity) return a.isAtCapacity ? 1 : -1;
+      if (a.activeAssignments !== b.activeAssignments) return a.activeAssignments - b.activeAssignments;
+      if (a.totalAssigned !== b.totalAssigned) return a.totalAssigned - b.totalAssigned;
+
+      const aLast = a.lastAssignedAt ? new Date(a.lastAssignedAt).getTime() : 0;
+      const bLast = b.lastAssignedAt ? new Date(b.lastAssignedAt).getTime() : 0;
+      if (aLast !== bLast) return aLast - bLast;
+
+      if (b.score !== a.score) return b.score - a.score;
+      return String(a.empId || a.id).localeCompare(String(b.empId || b.id));
+    });
+
+    const filtered = includeAtCapacity ? scored : scored.filter((worker) => !worker.isAtCapacity);
+    return filtered.slice(0, limit);
+  }
+
+  async reassignOrderRole(orderId, role, employeeId) {
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          assignments: {
+            include: {
+              employee: {
+                select: {
+                  id: true,
+                  empId: true,
+                  name: true,
+                  role: true,
+                  isActive: true
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (!order) {
+        throw new Error('Order not found');
+      }
+
+      if (TERMINAL_ORDER_STATUSES.includes(order.status)) {
+        throw new Error('Completed order cannot be reassigned');
+      }
+
+      if (!ASSIGNMENT_ROLES.includes(role)) {
+        throw new Error(`Unsupported assignment role ${role}`);
+      }
+
+      const existingAssignment = (order.assignments || []).find((assignment) => assignment.role === role);
+      if (!existingAssignment) {
+        throw new Error(`No existing assignment found for role ${role}`);
+      }
+
+      const employee = await tx.employee.findUnique({
+        where: { id: employeeId },
+        select: {
+          id: true,
+          empId: true,
+          name: true,
+          role: true,
+          isActive: true
+        }
+      });
+
+      if (!employee || !employee.isActive || !ASSIGNMENT_ROLES.includes(employee.role)) {
+        throw new Error('Replacement employee must be an active worker');
+      }
+
+      const updatedAssignment = await tx.orderAssignment.update({
+        where: { id: existingAssignment.id },
+        data: {
+          employeeId,
+          assignedAt: new Date(),
+          startedAt: null,
+          completedAt: null
+        },
+        include: {
+          employee: {
+            select: {
+              id: true,
+              empId: true,
+              name: true,
+              role: true,
+              isActive: true
+            }
+          }
+        }
+      });
+
+      return {
+        orderId,
+        role,
+        previousEmployee: existingAssignment.employee,
+        assignment: updatedAssignment
+      };
+    }, ASSIGNMENT_TRANSACTION_OPTIONS);
+  }
+
   async getSuggestedWorkersForRole(role, options = {}) {
     const tx = options.tx || this.prisma;
     const limit = Number.isFinite(options.limit) ? options.limit : 10;
